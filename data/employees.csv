@@ -1,0 +1,21 @@
+user_id,name,address,employment_status
+U001,Employee1,"Connaught Place, New Delhi",Terminated
+U002,Employee2,"Anna Salai, Chennai, Tamil Nadu",Active
+U003,Employee3,"Banjara Hills, Hyderabad, Telangana",Active
+U004,Employee4,"Connaught Place, New Delhi",Active
+U005,Employee5,"Gomti Nagar, Lucknow, Uttar Pradesh",Terminated
+U006,Employee6,"Viman Nagar, Pune, Maharashtra",Active
+U007,Employee7,"MG Road, Bengaluru, Karnataka",Active
+U008,Employee8,"Connaught Place, New Delhi",Active
+U009,Employee9,"Banjara Hills, Hyderabad, Telangana",Active
+U010,Employee10,"Viman Nagar, Pune, Maharashtra",Terminated
+U011,Employee11,"Gomti Nagar, Lucknow, Uttar Pradesh",Active
+U012,Employee12,"Gomti Nagar, Lucknow, Uttar Pradesh",Active
+U013,Employee13,"Banjara Hills, Hyderabad, Telangana",Active
+U014,Employee14,"Viman Nagar, Pune, Maharashtra",Active
+U015,Employee15,"MG Road, Bengaluru, Karnataka",Active
+U016,Employee16,"Sector 17, Chandigarh",Active
+U017,Employee17,"Anna Salai, Chennai, Tamil Nadu",Active
+U018,Employee18,"Banjara Hills, Hyderabad, Telangana",Active
+U019,Employee19,"Connaught Place, New Delhi",Active
+U020,Employee20,"Sector 17, Chandigarh",Active

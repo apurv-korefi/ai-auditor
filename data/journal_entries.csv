@@ -1,0 +1,21 @@
+je_id,posted_by,approved_by,date,account,amount
+JE-0001,a.gupta,a.gupta,2024-04-05,Travel Expense,14500.0
+JE-0002,p.verma,r.mehta,2024-04-10,Sales - Domestic,-250000.0
+JE-0003,r.mehta,p.verma,2024-05-02,Cash,50000.0
+JE-0004,n.gupta,n.gupta,2024-05-12,Suspense Account,99999.0
+JE-0005,s.iyer,k.patel,2024-06-01,Round-off,0.0
+JE-0006,k.patel,s.iyer,2024-06-15,Rent Expense,75000.0
+JE-0007,i.das,a.sharma,2024-07-08,Salary Payable,320000.0
+JE-0008,a.sharma,i.das,2024-08-03,GST Input Credit,-18000.0
+JE-0009,r.nair,a.rao,2024-09-11,Bad Debt Expense,42000.0
+JE-0010,a.rao,r.nair,2024-10-01,Sales Return,-15000.0
+JE-0011,s.kulkarni,p.chawla,2024-10-25,Maintenance,27500.0
+JE-0012,p.chawla,s.kulkarni,2024-11-04,IT Expense,48500.0
+JE-0013,a.reddy,m.krishnan,2024-12-19,Freight Outward,21000.0
+JE-0014,m.krishnan,a.reddy,2025-01-09,Misc Expense,49999.0
+JE-0015,d.mishra,r.jain,2025-01-21,Cash,-30000.0
+JE-0016,r.jain,d.mishra,2025-02-05,Prepaid Expense,12000.0
+JE-0017,h.vardhan,a.khan,2025-02-14,GST Payable,-22000.0
+JE-0018,a.khan,h.vardhan,2025-02-28,Office Supplies,8600.0
+JE-0019,v.bhat,s.joshi,2025-03-05,Electricity Expense,13200.0
+JE-0020,s.joshi,v.bhat,2025-03-15,Repair & Maintenance,17850.0
