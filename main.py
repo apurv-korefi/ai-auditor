@@ -28,8 +28,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Random secret is fine for local runs; you can also set NICEGUI_STORAGE_SECRET in env
 STORAGE_SECRET = os.getenv("NICEGUI_STORAGE_SECRET", secrets.token_urlsafe(32))
 
-# Dark mode controller (global)
-DARK = ui.dark_mode()
+
+def apply_theme() -> None:
+    # Quasar brand colors (buttons default to primary)
+    ui.colors(primary="#0f172a")  # Tailwind slate-900
 
 
 def user_store() -> dict:
@@ -77,9 +79,12 @@ def build_report(file_path: Path) -> Dict:
 
 
 def header() -> None:
-    with ui.header().classes("items-center justify-between px-4 bg-slate-900"):
-        with ui.column().classes("max-w-6xl"):
-            ui.label(APP_TITLE).classes("text-xl font-semibold")
+    apply_theme()
+    with ui.header().classes("bg-primary"):  # use brand color
+        with ui.row().classes("w-full justify-center"):  # centers the inner container
+            with ui.row().classes("w-full max-w-6xl items-center justify-between px-4"):
+                ui.label(APP_TITLE).classes("text-xl font-semibold text-white")
+                # put nav/actions here later if you want; if empty, the title still sits in the centered container
 
 
 @ui.page("/upload")
