@@ -39,24 +39,6 @@ def user_store() -> dict:
     return app.storage.user
 
 
-def build_report(file_path: Path) -> Dict:
-    """Create a demo report structure."""
-    now = datetime.now().isoformat(timespec="seconds")
-    return {
-        "file": file_path.name,
-        "generated_at": now,
-        "summary": (
-            "This is a placeholder summary. Replace build_report to use your actual outputs."
-        ),
-        "metrics": {"pages": 3, "entities": 12, "confidence": 0.97},
-        "action_items": [
-            {"title": "Verify extracted totals", "owner": "You", "due": "Tomorrow"},
-            {"title": "Export CSV & share", "owner": "You", "due": "Today"},
-            {"title": "Open questions for client", "owner": "Team", "due": "Next week"},
-        ],
-    }
-
-
 def header() -> None:
     ui.colors(primary="#0f172a")  # Tailwind slate-900
     with ui.header().classes("bg-primary"):  # use brand color
