@@ -310,44 +310,45 @@ def register_report_page(
                     # ensure cards are created inside the column container
                     with box:
                         for c in board[col]:
-                            # Square, outlined item cards with gray border, no shadow
+                            # Compact, outlined item cards with slight radius and gray border
                             item_card = (
                                 ui.card()
                                 .props("flat bordered")
                                 .classes(
-                                    "w-full mb-3 rounded-none border border-gray-300 bg-white"
+                                    "w-full mb-0 rounded border border-gray-200 bg-white p-3"
                                 )
                             )
                             with item_card:
-                                ui.label(c["id"]).classes(
-                                    "text-[11px] text-gray-500"
-                                )
-                                ui.label(c["title"]).classes(
-                                    "text-sm font-medium"
-                                )
-                                with ui.row().classes(
-                                    "items-center justify-between w-full mt-1"
-                                ):
-                                    with ui.row().classes("items-center gap-2"):
-                                        risk_badge(c["risk"])
-                                        ui.label(c["amount"]).classes(
-                                            "text-xs text-gray-500"
-                                        )
-                                    # Move menu
-                                    with ui.button("Move").props(
-                                        "flat dense"
-                                    ) as btn:
-                                        pass
-                                    with ui.menu().props(
-                                        'anchor="bottom right" self="top right"'
+                                with ui.column().classes("w-full gap-1"):
+                                    ui.label(c["id"]).classes(
+                                        "text-[11px] text-gray-500"
+                                    )
+                                    ui.label(c["title"]).classes(
+                                        "text-sm font-medium"
+                                    )
+                                    with ui.row().classes(
+                                        "items-center justify-between w-full mt-0.5"
                                     ):
-                                        for dest in COLUMNS:
-                                            ui.menu_item(
-                                                dest,
-                                                on_click=lambda _=None,
-                                                cid=c["id"],
-                                                d=dest: move_case(cid, d),
+                                        with ui.row().classes("items-center gap-2"):
+                                            risk_badge(c["risk"])
+                                            ui.label(c["amount"]).classes(
+                                                "text-xs text-gray-500"
                                             )
+                                        # Move menu
+                                        with ui.button("Move").props(
+                                            "flat dense"
+                                        ) as btn:
+                                            pass
+                                        with ui.menu().props(
+                                            'anchor="bottom right" self="top right"'
+                                        ):
+                                            for dest in COLUMNS:
+                                                ui.menu_item(
+                                                    dest,
+                                                    on_click=lambda _=None,
+                                                    cid=c["id"],
+                                                    d=dest: move_case(cid, d),
+                                                )
 
             with ui.card().classes("w-full rounded-2xl"):
                 with ui.row().classes("items-center justify-between w-full"):
@@ -368,11 +369,17 @@ def register_report_page(
                             "Pending Review": "bg-purple-50",
                             "Resolved": "bg-green-50",
                         }
+                        border_map = {
+                            "Issues": "border-blue-200",
+                            "In Progress": "border-yellow-200",
+                            "Pending Review": "border-purple-200",
+                            "Resolved": "border-green-200",
+                        }
                         column_card = (
                             ui.card()
                             .props("flat bordered")
                             .classes(
-                                f"flex-1 rounded-xl border border-gray-200 {bg_map.get(col, '')}"
+                                f"flex-1 rounded-xl border {border_map.get(col, 'border-gray-300')} {bg_map.get(col, '')}"
                             )
                         )
                         with column_card:
