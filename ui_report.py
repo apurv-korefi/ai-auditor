@@ -310,9 +310,15 @@ def register_report_page(
                     # ensure cards are created inside the column container
                     with box:
                         for c in board[col]:
-                            with ui.card().classes(
-                                "w-full mb-3 rounded-xl shadow-sm"
-                            ):
+                            # Square, outlined item cards with gray border, no shadow
+                            item_card = (
+                                ui.card()
+                                .props("flat bordered")
+                                .classes(
+                                    "w-full mb-3 rounded-none border border-gray-300 bg-white"
+                                )
+                            )
+                            with item_card:
                                 ui.label(c["id"]).classes(
                                     "text-[11px] text-gray-500"
                                 )
@@ -355,7 +361,21 @@ def register_report_page(
 
                 with ui.row().classes("w-full gap-4"):
                     for col in COLUMNS:
-                        with ui.card().classes("flex-1 rounded-xl"):
+                        # Faint background per column + outlined container
+                        bg_map = {
+                            "Issues": "bg-blue-50",
+                            "In Progress": "bg-yellow-50",
+                            "Pending Review": "bg-purple-50",
+                            "Resolved": "bg-green-50",
+                        }
+                        column_card = (
+                            ui.card()
+                            .props("flat bordered")
+                            .classes(
+                                f"flex-1 rounded-xl border border-gray-200 {bg_map.get(col, '')}"
+                            )
+                        )
+                        with column_card:
                             with ui.row().classes("items-center justify-between"):
                                 ui.label(col).classes("text-sm font-semibold")
                                 col_counts[col] = ui.label(
