@@ -82,7 +82,7 @@ def header() -> None:
     apply_theme()
     with ui.header().classes("bg-primary"):  # use brand color
         with ui.row().classes("w-full justify-center"):  # centers the inner container
-            with ui.row().classes("w-full max-w-6xl items-center justify-between px-4"):
+            with ui.row().classes("w-full max-w-5xl items-center justify-between px-4"):
                 ui.label(APP_TITLE).classes("text-xl font-semibold text-white")
                 # put nav/actions here later if you want; if empty, the title still sits in the centered container
 
@@ -90,8 +90,8 @@ def header() -> None:
 @ui.page("/upload")
 def upload_page() -> None:
     header()
-    with ui.column().classes("max-w-5xl mx-auto p-6 gap-3"):
-        ui.label("1) Upload").classes("text-2xl font-bold")
+    with ui.column().classes("w-full max-w-5xl mx-auto p-6 gap-3"):
+        ui.label("Upload").classes("text-2xl font-bold")
         ui.label("Choose a file to process.").classes("text-gray-600")
 
         store = user_store()
@@ -112,7 +112,7 @@ def upload_page() -> None:
 
         ui.upload(on_upload=on_upload, auto_upload=True).props(
             "accept=*/*, max-files=1"
-        )
+        ).classes("w-full").style("max-width: none")
 
         def clear() -> None:
             store.pop("file_path", None)
@@ -251,4 +251,4 @@ def index() -> None:
 
 if __name__ in {"__main__", "__mp_main__"}:
     app.add_static_files("/uploads", str(UPLOAD_DIR))
-    ui.run(reload=False, port=8080, storage_secret=STORAGE_SECRET)
+    ui.run(reload=True, port=8080, storage_secret=STORAGE_SECRET)
