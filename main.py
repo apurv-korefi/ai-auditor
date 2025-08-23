@@ -234,8 +234,20 @@ def report_page() -> None:
             return str(path)
 
         with ui.row().classes("gap-3"):
-            ui.download(download_json, label="Download JSON")
-            ui.download(download_csv, label="Download Action Items CSV")
+            with ui.row().classes("gap-3"):
+                ui.button(
+                    "Download JSON",
+                    on_click=lambda: ui.download(
+                        download_json(), filename="report.json"
+                    ),
+                )
+                ui.button(
+                    "Download Action Items CSV",
+                    on_click=lambda: ui.download(
+                        download_csv(), filename="action_items.csv"
+                    ),
+                )
+                ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
             ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
 
     footer()
