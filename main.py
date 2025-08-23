@@ -21,15 +21,17 @@ from typing import AsyncGenerator, Dict
 from nicegui import app, ui
 from nicegui.events import UploadEventArguments
 
-APP_TITLE = "Local Agent UI"
+APP_TITLE = "AI Audit Assitant"
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Random secret is fine for local runs; you can also set NICEGUI_STORAGE_SECRET in env
 STORAGE_SECRET = os.getenv("NICEGUI_STORAGE_SECRET", secrets.token_urlsafe(32))
 
-# Dark mode controller (global)
-DARK = ui.dark_mode()
+
+def apply_theme() -> None:
+    # Quasar brand colors (buttons default to primary)
+    ui.colors(primary="#0f172a")  # Tailwind slate-900
 
 
 def user_store() -> dict:
@@ -77,24 +79,19 @@ def build_report(file_path: Path) -> Dict:
 
 
 def header() -> None:
-    with ui.header().classes("items-center justify-between px-4"):
-        ui.label(APP_TITLE).classes("text-xl font-semibold")
-        with ui.row().classes("items-center gap-2"):
-            ui.link("Upload", "/upload")
-            ui.link("Processing", "/processing")
-            ui.link("Report", "/report")
-
-
-def footer() -> None:
-    with ui.footer().classes("justify-center"):
-        ui.label("Built with NiceGUI · Local-first")
+    apply_theme()
+    with ui.header().classes("bg-primary"):  # use brand color
+        with ui.row().classes("w-full justify-center"):  # centers the inner container
+            with ui.row().classes("w-full max-w-5xl items-center justify-between px-4"):
+                ui.label(APP_TITLE).classes("text-xl font-semibold text-white")
+                # put nav/actions here later if you want; if empty, the title still sits in the centered container
 
 
 @ui.page("/upload")
 def upload_page() -> None:
     header()
-    with ui.column().classes("max-w-3xl mx-auto p-6 gap-3"):
-        ui.label("1) Upload").classes("text-2xl font-bold")
+    with ui.column().classes("w-full max-w-5xl mx-auto p-6 gap-3"):
+        ui.label("Upload").classes("text-2xl font-bold")
         ui.label("Choose a file to process.").classes("text-gray-600")
 
         store = user_store()
@@ -115,7 +112,7 @@ def upload_page() -> None:
 
         ui.upload(on_upload=on_upload, auto_upload=True).props(
             "accept=*/*, max-files=1"
-        )
+        ).classes("w-full").style("max-width: none")
 
         def clear() -> None:
             store.pop("file_path", None)
@@ -131,8 +128,6 @@ def upload_page() -> None:
             else:
                 go_btn.disable()
             ui.button("Clear", on_click=clear).props("color=warning outline")
-
-    footer()
 
 
 @ui.page("/processing")
@@ -183,8 +178,6 @@ async def processing_page() -> None:
 
         ui.timer(0.2, run_stream, once=True)
 
-    footer()
-
 
 @ui.page("/report")
 def report_page() -> None:
@@ -234,11 +227,21 @@ def report_page() -> None:
             return str(path)
 
         with ui.row().classes("gap-3"):
-            ui.download(download_json, label="Download JSON")
-            ui.download(download_csv, label="Download Action Items CSV")
+            with ui.row().classes("gap-3"):
+                ui.button(
+                    "Download JSON",
+                    on_click=lambda: ui.download(
+                        download_json(), filename="report.json"
+                    ),
+                )
+                ui.button(
+                    "Download Action Items CSV",
+                    on_click=lambda: ui.download(
+                        download_csv(), filename="action_items.csv"
+                    ),
+                )
+                ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
             ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
-
-    footer()
 
 
 @ui.page("/")
@@ -248,4 +251,4 @@ def index() -> None:
 
 if __name__ in {"__main__", "__mp_main__"}:
     app.add_static_files("/uploads", str(UPLOAD_DIR))
-    ui.run(reload=False, port=8080, storage_secret=STORAGE_SECRET)
+    ui.run(reload=True, port=8080, storage_secret=STORAGE_SECRET)
