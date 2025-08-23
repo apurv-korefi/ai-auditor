@@ -126,6 +126,10 @@ def register_report_page(
     @ui.page("/report")
     def report_page() -> None:  # noqa: F811
         header()
+        # Ensure q-card inner sections have no default padding when desired
+        ui.add_head_html(
+            "<style>.card-zero-pad .q-card__section{padding:0!important;margin:0!important}</style>"
+        )
 
         store = user_store()
         report = store.get("report")
@@ -140,17 +144,8 @@ def register_report_page(
                 ui.label("Investigation Dashboard · AI Audit Results").classes(
                     "text-xl font-semibold"
                 )
-                ui.button(
-                    "Download JSON",
-                    on_click=lambda: ui.download(
-                        _download_json(report), filename="report.json"
-                    ),
-                )
 
-            with ui.card().classes("w-full"):
-                ui.label(report.get("summary", "Audit summary")).classes(
-                    "text-gray-700"
-                )
+            # Removed summary text display per request
 
             with ui.row().classes("w-full gap-3"):
                 with (
@@ -183,16 +178,22 @@ def register_report_page(
                     ui.label("High-Risk Findings").classes("text-sm text-gray-600")
 
             # ---------- Visualization (middle) ----------
-            with ui.card().classes("w-full"):
-                ui.label("Compliance Risk Analysis").classes("text-lg font-semibold")
-                ui.label(
-                    "Size indicates anomaly count, color shows risk level."
-                ).classes("text-sm text-gray-600")
-                ui.echart(_treemap_options_from_report(report)).classes("w-full").style(
-                    "height: 360px"
+            # Remove padding around the chart while keeping tidy padding for text/legend
+            with ui.card().classes("w-full p-0 card-zero-pad"):
+                with ui.column().classes("p-4 pb-2"):
+                    ui.label("Compliance Risk Analysis").classes(
+                        "text-lg font-semibold"
+                    )
+                    ui.label(
+                        "Size indicates anomaly count, color shows risk level."
+                    ).classes("text-sm text-gray-600")
+                ui.echart(_treemap_options_from_report(report)).classes(
+                    "w-full p-0 -mt-6 -mb-6"
+                ).style(
+                    "height: 360px; margin-top: -24px; margin-bottom: -24px; padding: 0"
                 )
 
-                with ui.row().classes("items-center gap-4 pt-2"):
+                with ui.row().classes("items-center gap-4 p-4 pt-2"):
                     # legend
                     for label, color in [
                         ("High Risk", SEV_COLOR["high"]),
