@@ -150,8 +150,8 @@ def register_report_page(
             with ui.row().classes("w-full gap-3"):
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     ui.label(
                         str(report.get("metrics", {}).get("rules_total", 0))
@@ -159,8 +159,8 @@ def register_report_page(
                     ui.label("Rules Executed").classes("text-sm text-gray-600")
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     ui.label(str(report.get("metrics", {}).get("findings", 0))).classes(
                         "text-3xl font-semibold"
@@ -168,8 +168,8 @@ def register_report_page(
                     ui.label("Total Findings").classes("text-sm text-gray-600")
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     high = report.get("metrics", {}).get("critical", 0) + report.get(
                         "metrics", {}
@@ -179,7 +179,7 @@ def register_report_page(
 
             # ---------- Visualization (middle) ----------
             # Remove padding around the chart while keeping tidy padding for text/legend
-            with ui.card().classes("w-full p-0 card-zero-pad"):
+            with ui.card().props("bordered").classes("w-full p-0 card-zero-pad border border-gray-100"):
                 with ui.column().classes("p-4 pb-2"):
                     ui.label("Compliance Risk Analysis").classes(
                         "text-lg font-semibold"
@@ -351,7 +351,7 @@ def register_report_page(
                                                     d=dest: move_case(cid, d),
                                                 )
 
-            with ui.card().classes("w-full rounded-2xl"):
+            with ui.card().props("bordered").classes("w-full rounded-2xl border border-gray-100"):
                 with ui.row().classes("items-center justify-between w-full"):
                     ui.label("Investigation Kanban Board").classes(
                         "text-lg font-semibold"
