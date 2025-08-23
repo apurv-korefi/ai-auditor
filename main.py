@@ -90,32 +90,33 @@ def header() -> None:
 @ui.page("/upload")
 def upload_page() -> None:
     header()
-    with ui.column().classes("w-full max-w-5xl mx-auto p-6 gap-3"):
+    with ui.column().classes("w-full max-w-5xl mx-auto p-6 bg-slate-50 gap-3"):
         ui.label("Upload").classes("text-2xl font-bold")
-        ui.label("Choose a file to process.").classes("text-gray-600")
+        ui.label("Choose one or more files to process.").classes("text-gray-600")
 
         store = user_store()
         selected = ui.label().classes("text-sm text-gray-500")
 
-        # If a file was uploaded earlier in this session, reflect it and allow proceeding
-        existing = store.get("file_path")
-        if existing:
-            selected.text = f"Selected: {Path(existing).name}"
+        files = list(store.get("file_paths") or [])
+        if files:
+            selected.text = f"Selected: {len(files)} file(s)"
 
         def on_upload(e: UploadEventArguments) -> None:
             dest = UPLOAD_DIR / e.name
             dest.write_bytes(e.content.read())
-            store["file_path"] = str(dest)
-            selected.text = f"Selected: {dest.name}"
+            files = list(store.get("file_paths") or [])
+            files.append(str(dest))
+            store["file_paths"] = files
+            selected.text = f"Selected: {len(files)} file(s)"
             go_btn.enable()
-            ui.notify(f"Uploaded {dest.name}", type="positive")
+            ui.notify(f"Added {dest.name}", type="positive")
 
         ui.upload(on_upload=on_upload, auto_upload=True).props(
-            "accept=*/*, max-files=1"
+            "accept=*/*, multiple, max-files=20"
         ).classes("w-full").style("max-width: none")
 
         def clear() -> None:
-            store.pop("file_path", None)
+            store.pop("file_paths", None)
             selected.text = ""
             go_btn.disable()
 
@@ -123,7 +124,7 @@ def upload_page() -> None:
             go_btn = ui.button(
                 "Go to Processing", on_click=lambda: ui.navigate.to("/processing")
             )
-            if existing:
+            if files:
                 go_btn.enable()
             else:
                 go_btn.disable()
@@ -133,16 +134,21 @@ def upload_page() -> None:
 @ui.page("/processing")
 async def processing_page() -> None:
     header()
-    with ui.column().classes("max-w-4xl mx-auto p-6 gap-3"):
+    with ui.column().classes("max-w-5xl mx-auto p-6 gap-3"):
         ui.label("2) Processing").classes("text-2xl font-bold")
         ui.label("Streaming agent output in real-time.").classes("text-gray-600")
 
         store = user_store()
-        file_path = Path(store.get("file_path", "")) if store.get("file_path") else None
-        if not file_path or not file_path.exists():
-            ui.notify("No file selected. Please upload a file first.", type="warning")
+        files = [Path(p) for p in (store.get("file_paths") or [])]
+        if not files or not files[0].exists():
+            ui.notify("No files selected. Please upload first.", type="warning")
             ui.navigate.to("/upload")
             return
+
+        file_path = files[0]  # or iterate over `files` if you want to process all
+        ui.label("Files: " + ", ".join(p.name for p in files)).classes(
+            "text-sm text-gray-500"
+        )
 
         with ui.row().classes("items-center gap-2"):
             ui.icon("description")
