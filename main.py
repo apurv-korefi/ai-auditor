@@ -21,7 +21,7 @@ from typing import AsyncGenerator, Dict
 from nicegui import app, ui
 from nicegui.events import UploadEventArguments
 
-APP_TITLE = "Local Agent UI"
+APP_TITLE = "AI Audit Assitant"
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -77,23 +77,15 @@ def build_report(file_path: Path) -> Dict:
 
 
 def header() -> None:
-    with ui.header().classes("items-center justify-between px-4"):
-        ui.label(APP_TITLE).classes("text-xl font-semibold")
-        with ui.row().classes("items-center gap-2"):
-            ui.link("Upload", "/upload")
-            ui.link("Processing", "/processing")
-            ui.link("Report", "/report")
-
-
-def footer() -> None:
-    with ui.footer().classes("justify-center"):
-        ui.label("Built with NiceGUI · Local-first")
+    with ui.header().classes("items-center justify-between px-4 bg-slate-900"):
+        with ui.column().classes("max-w-6xl"):
+            ui.label(APP_TITLE).classes("text-xl font-semibold")
 
 
 @ui.page("/upload")
 def upload_page() -> None:
     header()
-    with ui.column().classes("max-w-3xl mx-auto p-6 gap-3"):
+    with ui.column().classes("max-w-5xl mx-auto p-6 gap-3"):
         ui.label("1) Upload").classes("text-2xl font-bold")
         ui.label("Choose a file to process.").classes("text-gray-600")
 
@@ -131,8 +123,6 @@ def upload_page() -> None:
             else:
                 go_btn.disable()
             ui.button("Clear", on_click=clear).props("color=warning outline")
-
-    footer()
 
 
 @ui.page("/processing")
@@ -182,8 +172,6 @@ async def processing_page() -> None:
             ui.notify("Processing complete", type="positive")
 
         ui.timer(0.2, run_stream, once=True)
-
-    footer()
 
 
 @ui.page("/report")
@@ -249,8 +237,6 @@ def report_page() -> None:
                 )
                 ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
             ui.button("Back to Upload", on_click=lambda: ui.navigate.to("/upload"))
-
-    footer()
 
 
 @ui.page("/")
