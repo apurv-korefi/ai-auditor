@@ -134,7 +134,7 @@ def register_report_page(
             ui.navigate.to("/processing")
             return
 
-        with ui.column().classes("w-full max-w-6xl mx-auto p-6 gap-4"):
+        with ui.column().classes("w-full max-w-5xl mx-auto p-6 gap-4"):
             # ---------- Summary (top) ----------
             with ui.row().classes("items-center justify-between w-full"):
                 ui.label("Investigation Dashboard · AI Audit Results").classes(
@@ -210,10 +210,14 @@ def register_report_page(
             COLUMNS = ["Issues", "In Progress", "Pending Review", "Resolved"]
 
             # Seed simple cases from the report if none in session
+            # Normalize any previously stored cases from older schema
             def _seed_cases(report: dict, limit: int = 6) -> list[dict]:
                 cases: list[dict] = []
                 i = 1
-                for f in report.get("findings", []):
+                # prefer raw.findings if available (current report shape)
+                for f in report.get("raw", {}).get("findings", []) or report.get(
+                    "findings", []
+                ):
                     count = int(f.get("count", 0))
                     if count <= 0:
                         continue
@@ -247,7 +251,24 @@ def register_report_page(
                 return cases
 
             # session-backed cases
-            cases = store.get("cases") or _seed_cases(report)
+            status_map = {
+                "new": "Issues",
+                "in_progress": "In Progress",
+                "review": "Pending Review",
+                "resolved": "Resolved",
+                # collapse extra statuses into closest columns
+                "suspicious": "Issues",
+                "compliance": "Pending Review",
+            }
+
+            cases = store.get("cases")
+            if not cases:
+                cases = _seed_cases(report)
+            else:
+                # migrate any old statuses to current column names
+                for c in cases:
+                    s = (c.get("status") or "").strip()
+                    c["status"] = status_map.get(s, s if s in COLUMNS else "Issues")
             store["cases"] = cases
 
             # board view and containers
@@ -286,31 +307,41 @@ def register_report_page(
                     box = col_boxes[col]
                     box.clear()
                     col_counts[col].text = str(len(board[col]))
-                    for c in board[col]:
-                        with ui.card().classes("w-full mb-3 rounded-xl shadow-sm"):
-                            ui.label(c["id"]).classes("text-[11px] text-gray-500")
-                            ui.label(c["title"]).classes("text-sm font-medium")
-                            with ui.row().classes(
-                                "items-center justify-between w-full mt-1"
+                    # ensure cards are created inside the column container
+                    with box:
+                        for c in board[col]:
+                            with ui.card().classes(
+                                "w-full mb-3 rounded-xl shadow-sm"
                             ):
-                                with ui.row().classes("items-center gap-2"):
-                                    risk_badge(c["risk"])
-                                    ui.label(c["amount"]).classes(
-                                        "text-xs text-gray-500"
-                                    )
-                                # Move menu
-                                with ui.button("Move").props("flat dense") as btn:
-                                    pass
-                                with ui.menu().props(
-                                    'anchor="bottom right" self="top right"'
+                                ui.label(c["id"]).classes(
+                                    "text-[11px] text-gray-500"
+                                )
+                                ui.label(c["title"]).classes(
+                                    "text-sm font-medium"
+                                )
+                                with ui.row().classes(
+                                    "items-center justify-between w-full mt-1"
                                 ):
-                                    for dest in COLUMNS:
-                                        ui.menu_item(
-                                            dest,
-                                            on_click=lambda _=None,
-                                            cid=c["id"],
-                                            d=dest: move_case(cid, d),
+                                    with ui.row().classes("items-center gap-2"):
+                                        risk_badge(c["risk"])
+                                        ui.label(c["amount"]).classes(
+                                            "text-xs text-gray-500"
                                         )
+                                    # Move menu
+                                    with ui.button("Move").props(
+                                        "flat dense"
+                                    ) as btn:
+                                        pass
+                                    with ui.menu().props(
+                                        'anchor="bottom right" self="top right"'
+                                    ):
+                                        for dest in COLUMNS:
+                                            ui.menu_item(
+                                                dest,
+                                                on_click=lambda _=None,
+                                                cid=c["id"],
+                                                d=dest: move_case(cid, d),
+                                            )
 
             with ui.card().classes("w-full rounded-2xl"):
                 with ui.row().classes("items-center justify-between w-full"):
