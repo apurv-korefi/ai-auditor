@@ -21,6 +21,11 @@ from typing import AsyncGenerator, Dict
 from nicegui import app, ui
 from nicegui.events import UploadEventArguments
 
+from dataclasses import dataclass
+from typing import Literal, Optional, Any, Dict, List
+import random
+import time
+
 APP_TITLE = "AI Audit Assitant"
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -131,58 +136,10 @@ def upload_page() -> None:
             ui.button("Clear", on_click=clear).props("color=warning outline")
 
 
-@ui.page("/processing")
-async def processing_page() -> None:
-    header()
-    with ui.column().classes("max-w-5xl mx-auto p-6 gap-3"):
-        ui.label("2) Processing").classes("text-2xl font-bold")
-        ui.label("Streaming agent output in real-time.").classes("text-gray-600")
+# after you define header() and user_store(), import and register:
+from ui_processing import register_processing_page
 
-        store = user_store()
-        files = [Path(p) for p in (store.get("file_paths") or [])]
-        if not files or not files[0].exists():
-            ui.notify("No files selected. Please upload first.", type="warning")
-            ui.navigate.to("/upload")
-            return
-
-        file_path = files[0]  # or iterate over `files` if you want to process all
-        ui.label("Files: " + ", ".join(p.name for p in files)).classes(
-            "text-sm text-gray-500"
-        )
-
-        with ui.row().classes("items-center gap-2"):
-            ui.icon("description")
-            ui.label(file_path.name).classes("text-sm text-gray-500")
-
-        stream_box = (
-            ui.textarea(label="Agent stream", placeholder="Waiting for tokens...")
-            .props("rows=12, readonly")
-            .classes("w-full font-mono")
-        )
-
-        progress = ui.linear_progress(show_value=False).props("instant-feedback")
-
-        with ui.row().classes("gap-3"):
-            ui.button("Restart", on_click=lambda: ui.navigate.reload())
-            navigate_btn = ui.button(
-                "Continue to Report", on_click=lambda: ui.navigate.to("/report")
-            )
-            navigate_btn.disable()
-
-        async def run_stream() -> None:
-            progress.value = 0.2
-            stream_box.value = ""
-            async for token in fake_agent_stream(file_path):
-                stream_box.value += token
-                await asyncio.sleep(0)
-            progress.value = 0.9
-            report = build_report(file_path)
-            store["report"] = report
-            progress.value = 1.0
-            navigate_btn.enable()
-            ui.notify("Processing complete", type="positive")
-
-        ui.timer(0.2, run_stream, once=True)
+register_processing_page(header, user_store)
 
 
 @ui.page("/report")
