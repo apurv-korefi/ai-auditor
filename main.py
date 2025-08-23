@@ -34,57 +34,13 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 STORAGE_SECRET = os.getenv("NICEGUI_STORAGE_SECRET", secrets.token_urlsafe(32))
 
 
-def apply_theme() -> None:
-    # Quasar brand colors (buttons default to primary)
-    ui.colors(primary="#0f172a")  # Tailwind slate-900
-
-
 def user_store() -> dict:
     """Per-session storage on server side; requires storage_secret in ui.run."""
     return app.storage.user
 
 
-async def fake_agent_stream(file_path: Path) -> AsyncGenerator[str, None]:
-    """Simulate a token stream without using newline escapes."""
-    lines = [
-        f"Processing file: {file_path.name}",
-        "Analyzing content...",
-        "Running model passes...",
-        "Extracting insights...",
-        "Finalizing...",
-        "",
-        (
-            "Agent: The document was parsed successfully. Key sections identified, "
-            "entities extracted, and a draft report is ready."
-        ),
-    ]
-    for line in lines:
-        chunk = (line + " EOL ") if line else "EOL "
-        for ch in chunk:
-            yield ch
-            await asyncio.sleep(0.01)
-
-
-def build_report(file_path: Path) -> Dict:
-    """Create a demo report structure."""
-    now = datetime.now().isoformat(timespec="seconds")
-    return {
-        "file": file_path.name,
-        "generated_at": now,
-        "summary": (
-            "This is a placeholder summary. Replace build_report to use your actual outputs."
-        ),
-        "metrics": {"pages": 3, "entities": 12, "confidence": 0.97},
-        "action_items": [
-            {"title": "Verify extracted totals", "owner": "You", "due": "Tomorrow"},
-            {"title": "Export CSV & share", "owner": "You", "due": "Today"},
-            {"title": "Open questions for client", "owner": "Team", "due": "Next week"},
-        ],
-    }
-
-
 def header() -> None:
-    apply_theme()
+    ui.colors(primary="#0f172a")  # Tailwind slate-900
     with ui.header().classes("bg-primary"):  # use brand color
         with ui.row().classes("w-full justify-center"):  # centers the inner container
             with ui.row().classes("w-full max-w-5xl items-center justify-between px-4"):
@@ -92,51 +48,10 @@ def header() -> None:
                 # put nav/actions here later if you want; if empty, the title still sits in the centered container
 
 
-@ui.page("/upload")
-def upload_page() -> None:
-    header()
-    with ui.column().classes("w-full max-w-5xl mx-auto p-6 bg-slate-50 gap-3"):
-        ui.label("Upload").classes("text-2xl font-bold")
-        ui.label("Choose one or more files to process.").classes("text-gray-600")
+from ui_upload import register_upload_page
 
-        store = user_store()
-        selected = ui.label().classes("text-sm text-gray-500")
+register_upload_page(header, user_store, UPLOAD_DIR)
 
-        files = list(store.get("file_paths") or [])
-        if files:
-            selected.text = f"Selected: {len(files)} file(s)"
-
-        def on_upload(e: UploadEventArguments) -> None:
-            dest = UPLOAD_DIR / e.name
-            dest.write_bytes(e.content.read())
-            files = list(store.get("file_paths") or [])
-            files.append(str(dest))
-            store["file_paths"] = files
-            selected.text = f"Selected: {len(files)} file(s)"
-            go_btn.enable()
-            ui.notify(f"Added {dest.name}", type="positive")
-
-        ui.upload(on_upload=on_upload, auto_upload=True).props(
-            "accept=*/*, multiple, max-files=20"
-        ).classes("w-full").style("max-width: none")
-
-        def clear() -> None:
-            store.pop("file_paths", None)
-            selected.text = ""
-            go_btn.disable()
-
-        with ui.row().classes("gap-3"):
-            go_btn = ui.button(
-                "Go to Processing", on_click=lambda: ui.navigate.to("/processing")
-            )
-            if files:
-                go_btn.enable()
-            else:
-                go_btn.disable()
-            ui.button("Clear", on_click=clear).props("color=warning outline")
-
-
-# after you define header() and user_store(), import and register:
 from ui_processing import register_processing_page
 
 register_processing_page(header, user_store)

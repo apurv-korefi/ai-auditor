@@ -8,6 +8,74 @@ from typing import Callable, Optional
 from nicegui import ui
 from processing_runtime import EVENT_BUS, run_engine
 
+from datetime import datetime
+
+
+def build_mock_report_from_audit() -> dict:
+    audit = {
+        "findings": [
+            {
+                "test": "JE same user posted & approved",
+                "severity": "high",
+                "count": 2,
+                "sample_ids": ["JE-0001", "JE-0004"],
+                "notes": None,
+            },
+            {
+                "test": "P2P duplicate invoices",
+                "severity": "high",
+                "count": 0,
+                "sample_ids": [],
+                "notes": None,
+            },
+            {
+                "test": "Fictitious vendor (address match)",
+                "severity": "medium",
+                "count": 42,
+                "sample_ids": ["V0001", "V001", "V004", "V005", "V009"],
+                "notes": None,
+            },
+            {
+                "test": "Terminated users with access",
+                "severity": "critical",
+                "count": 3,
+                "sample_ids": ["U001", "U005", "U010"],
+                "notes": None,
+            },
+        ],
+        "summary": "4 tests run, 47 total flags.",
+    }
+
+    total_rules = len(audit["findings"])
+    total_flags = sum(item["count"] for item in audit["findings"])
+    sev = lambda s: sum(
+        item["count"] for item in audit["findings"] if item["severity"].lower() == s
+    )
+
+    report = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "summary": audit["summary"],
+        "metrics": {
+            "rules_total": total_rules,
+            "findings": total_flags,
+            "critical": sev("critical"),
+            "high": sev("high"),
+            "medium": sev("medium"),
+        },
+        "action_items": [
+            {
+                "title": f"Review {item['test']} ({item['count']} findings)",
+                "owner": "You",
+                "due": "Today",
+            }
+            for item in audit["findings"]
+            if item["count"] > 0
+        ],
+        # keep raw for later drilldowns if you want
+        "raw": audit,
+    }
+    return report
+
 
 def register_processing_page(
     header: Callable[[], None],
@@ -77,14 +145,13 @@ def register_processing_page(
                 # scrolling activity feed
                 rule_log = ui.log().classes("w-full h-56")
 
+            # Buttons (wire cleanup on navigate)
             with ui.row().classes("gap-3"):
-                ui.button("Restart", on_click=lambda: ui.navigate.reload())
-                next_btn = ui.button(
-                    "Continue to Report", on_click=lambda: ui.navigate.to("/report")
-                )
+                restart_btn = ui.button("Restart")
+                next_btn = ui.button("Continue to Report")
                 next_btn.disable()
 
-        # Start engine and consume events
+        # ---------- Start engine and consume events ----------
         store = user_store()
         files = [Path(p) for p in (store.get("file_paths") or [])]
         if not files or not files[0].exists():
@@ -92,81 +159,119 @@ def register_processing_page(
             ui.navigate.to("/upload")
             return
 
-        asyncio.create_task(run_engine(files))
+        engine_task: Optional[asyncio.Task] = asyncio.create_task(run_engine(files))
 
         async def event_consumer() -> None:
-            total = 0
-            completed = 0
-            findings_sum = 0
-            current_rule_id: Optional[str] = ""
+            try:
+                total = 0
+                completed = 0
+                findings_sum = 0
+                current_rule_id: Optional[str] = ""
 
-            while True:
-                ev = await EVENT_BUS.get()
+                while True:
+                    ev = await EVENT_BUS.get()
 
-                if ev.type == "overall":
-                    d = ev.data or {}
-                    completed = int(d.get("completed", completed))
-                    total = int(d.get("total", total))
-                    findings_sum = int(d.get("findings", findings_sum))
-                    pct = completed / max(1, total)
-                    overall_bar.value = pct
-                    overall_completed.text = str(completed)
-                    overall_findings.text = str(findings_sum)
-                    overall_percent.text = f"{int(pct * 100)}%"
-                    overall_done.text = f"{completed} of {total} completed"
+                    if ev.type == "overall":
+                        d = ev.data or {}
+                        completed = int(d.get("completed", completed))
+                        total = int(d.get("total", total))
+                        findings_sum = int(d.get("findings", findings_sum))
+                        pct = completed / max(1, total)
+                        overall_bar.value = pct
+                        overall_completed.text = str(completed)
+                        overall_findings.text = str(findings_sum)
+                        overall_percent.text = f"{int(pct * 100)}%"
+                        overall_done.text = f"{completed} of {total} completed"
 
-                elif ev.type == "rule_started":
-                    current_rule_id = ev.rule_id or ""
-                    d = ev.data or {}
-                    title = d.get("title", "")
-                    tag = d.get("tag", "")
-                    current_rule_title.text = title or "Running rule"
-                    current_rule_meta.text = (
-                        f"{current_rule_id} · {tag}" if tag else current_rule_id
-                    )
-                    current_status.text = "Starting"
-                    current_tool.text = " "
-                    rule_log.clear()
-                    rule_log.push(f"Started {current_rule_meta.text}")
+                    elif ev.type == "rule_started":
+                        current_rule_id = ev.rule_id or ""
+                        d = ev.data or {}
+                        title = d.get("title", "")
+                        tag = d.get("tag", "")
+                        current_rule_title.text = title or "Running rule"
+                        current_rule_meta.text = (
+                            f"{current_rule_id} · {tag}" if tag else current_rule_id
+                        )
+                        current_status.text = "Starting"
+                        current_tool.text = " "
+                        rule_log.clear()
+                        try:
+                            rule_log.push(f"Started {current_rule_meta.text}")
+                        except RuntimeError:
+                            return  # client gone
 
-                elif ev.type == "rule_status":
-                    d = ev.data or {}
-                    msg = d.get("text", " ")
-                    current_status.text = msg
-                    rule_log.push(msg)
+                    elif ev.type == "rule_status":
+                        d = ev.data or {}
+                        msg = d.get("text", " ")
+                        current_status.text = msg
+                        try:
+                            rule_log.push(msg)
+                        except RuntimeError:
+                            return
 
-                # We ignore rule_progress events (only one progress bar at top)
+                    # We ignore rule_progress events (only one progress bar at top)
 
-                elif ev.type == "tool_call":
-                    d = ev.data or {}
-                    name = d.get("name", "")
-                    args = d.get("args", {})
-                    current_tool.text = f"Tool: {name}"
-                    rule_log.push(f"Tool {name} call {args}")
+                    elif ev.type == "tool_call":
+                        d = ev.data or {}
+                        name = d.get("name", "")
+                        args = d.get("args", {})
+                        current_tool.text = f"Tool: {name}"
+                        try:
+                            rule_log.push(f"Tool {name} call {args}")
+                        except RuntimeError:
+                            return
 
-                elif ev.type == "tool_result":
-                    d = ev.data or {}
-                    name = d.get("name", " ")
-                    ok = d.get("ok", True)
-                    summary = d.get("summary", "")
-                    status = "ok" if ok else "error"
-                    rule_log.push(f"Tool {name} {status}: {summary}")
-                    current_tool.text = " "
+                    elif ev.type == "tool_result":
+                        d = ev.data or {}
+                        name = d.get("name", " ")
+                        ok = d.get("ok", True)
+                        summary = d.get("summary", "")
+                        status = "ok" if ok else "error"
+                        try:
+                            rule_log.push(f"Tool {name} {status}: {summary}")
+                        except RuntimeError:
+                            return
+                        current_tool.text = " "
 
-                elif ev.type == "rule_completed":
-                    d = ev.data or {}
-                    f = int(d.get("findings", 0))
-                    ms = int(d.get("ms", 0))
-                    current_status.text = f"Completed · {f} findings · {ms} ms"
-                    rule_log.push(f"Completed {current_rule_id} with {f} findings")
+                    elif ev.type == "rule_completed":
+                        d = ev.data or {}
+                        f = int(d.get("findings", 0))
+                        ms = int(d.get("ms", 0))
+                        current_status.text = f"Completed · {f} findings · {ms} ms"
+                        try:
+                            rule_log.push(
+                                f"Completed {current_rule_id} with {f} findings"
+                            )
+                        except RuntimeError:
+                            return
 
-                elif ev.type == "rule_failed":
-                    current_status.text = "Failed"
-                    rule_log.push(f"Failed {ev.rule_id}")
+                    elif ev.type == "rule_failed":
+                        current_status.text = "Failed"
+                        try:
+                            rule_log.push(f"Failed {ev.rule_id}")
+                        except RuntimeError:
+                            return
 
-                elif ev.type == "done":
-                    next_btn.enable()
-                    current_status.text = "All rules finished"
-                    rule_log.push("Run finished")
+                    elif ev.type == "done":
+                        # stash a mock report so /report can render immediately
+                        store["report"] = build_mock_report_from_audit()
+                        next_btn.enable()
+                        current_status.text = "All rules finished"
+                        try:
+                            rule_log.push("Run finished")
+                        except RuntimeError:
+                            pass
+            except asyncio.CancelledError:
+                return  # exit quietly when we cancel on navigation
 
-        asyncio.create_task(event_consumer())
+        consumer_task: asyncio.Task = asyncio.create_task(event_consumer())
+
+        # Wire buttons with cleanup
+        def cleanup_tasks() -> None:
+            if not engine_task.done():
+                engine_task.cancel()
+            if not consumer_task.done():
+                consumer_task.cancel()
+
+        restart_btn.on_click(lambda: (cleanup_tasks(), ui.navigate.reload()))
+        next_btn.on_click(lambda: (cleanup_tasks(), ui.navigate.to("/report")))
