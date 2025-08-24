@@ -64,9 +64,22 @@ register_report_page(header, user_store)
 
 @ui.page("/")
 def index() -> None:
-    ui.navigate.to("/upload")
+    header()
+
+    with ui.column().classes(
+        "w-full max-w-4xl mx-auto p-6 items-center justify-center gap-4"
+    ):
+        ui.image("/assets/landing.jpeg").classes(
+            "w-full max-w-sm h-auto rounded-xl shadow mx-auto"
+        )
+        ui.button(
+            "Let's Start Audit",
+            on_click=lambda: ui.navigate.to("/upload"),
+        ).props("size=large color=primary").classes("mt-1")
 
 
 if __name__ in {"__main__", "__mp_main__"}:
     app.add_static_files("/uploads", str(UPLOAD_DIR))
+    # Serve landing image
+    app.add_static_files("/assets", str(Path(".")))
     ui.run(reload=True, port=8080, storage_secret=STORAGE_SECRET)
