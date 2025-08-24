@@ -274,6 +274,11 @@ async def run_agent(files: List[Path]) -> None:
             missing = [t for t in req if t not in dfs]
             return ", ".join(missing) if missing else None
 
+        async def _emit_thinking(rule_id: str, steps: List[str], delay: float = 0.1) -> None:
+            for t in steps:
+                await emit(Event("rule_status", rule_id=rule_id, data={"text": t}))
+                await asyncio.sleep(delay)
+
         async def rule_lifecycle(
             rid: str,
             title: str,
@@ -283,6 +288,16 @@ async def run_agent(files: List[Path]) -> None:
             start_ms = time.perf_counter()
             await emit(Event("rule_started", rule_id=rid, data={"title": title, "tag": tag}))
             await emit(Event("rule_status", rule_id=rid, data={"text": "Thinking..."}))
+            # Simulated LLM streaming thoughts for UX; can be replaced with real streaming later
+            await _emit_thinking(
+                rid,
+                [
+                    "LLM: reading inputs",
+                    "LLM: planning next step",
+                    f"LLM: selecting tool {fn}" if fn else "LLM: no suitable tool found",
+                ],
+                delay=0.08,
+            )
 
             findings = 0
             finding_model: Optional[Finding] = None
@@ -306,6 +321,7 @@ async def run_agent(files: List[Path]) -> None:
                             )
                         )
                     else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
                         await emit(
                             Event(
                                 "tool_call",
@@ -352,6 +368,7 @@ async def run_agent(files: List[Path]) -> None:
                             )
                         )
                     else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
                         await emit(
                             Event(
                                 "tool_call",
@@ -398,6 +415,7 @@ async def run_agent(files: List[Path]) -> None:
                             )
                         )
                     else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
                         await emit(
                             Event(
                                 "tool_call",
@@ -447,6 +465,7 @@ async def run_agent(files: List[Path]) -> None:
                             )
                         )
                     else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
                         await emit(
                             Event(
                                 "tool_call",
