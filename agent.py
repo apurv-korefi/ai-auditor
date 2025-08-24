@@ -306,12 +306,6 @@ async def _main() -> None:
                 print(f"-- reasoning: {evt['text']}")
             else:
                 print(f"-- reasoning: (no summary provided)")
-        elif t == "tool_called":
-            print(f"-- tool_called: {evt['tool']}")
-        elif t == "tool_output":
-            print(f"-- tool_output: {evt['tool']} :: {evt['output_preview']}")
-        elif t == "assistant_message":
-            print(f"-- Assistant message: {evt['text_preview']}")
         elif t == "done":
             print("\n=== AUDIT REPORT (JSON) ===")
             print(evt["final_output"])
