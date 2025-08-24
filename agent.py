@@ -146,10 +146,8 @@ AUDITOR = Agent[AuditContext](
         compile_report,
     ],
     model_settings=ModelSettings(
-        # Ask the model to include a reasoning summary (shown in stream as ReasoningItem)
-        reasoning=ReasoningConfig(effort="low", summary="auto"),
-        # If available, include encrypted reasoning content (safe to ignore if not used)
-        response_include=["reasoning.encrypted_content"],
+        # Ask the model to include a plaintext reasoning summary
+        reasoning=ReasoningConfig(effort="low", summary="detailed"),
         verbosity="low",
         truncation="auto",
     ),
