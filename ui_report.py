@@ -126,6 +126,10 @@ def register_report_page(
     @ui.page("/report")
     def report_page() -> None:  # noqa: F811
         header()
+        # Ensure q-card inner sections have no default padding when desired
+        ui.add_head_html(
+            "<style>.card-zero-pad .q-card__section{padding:0!important;margin:0!important}</style>"
+        )
 
         store = user_store()
         report = store.get("report")
@@ -134,29 +138,20 @@ def register_report_page(
             ui.navigate.to("/processing")
             return
 
-        with ui.column().classes("w-full max-w-6xl mx-auto p-6 gap-4"):
+        with ui.column().classes("w-full max-w-5xl mx-auto p-6 gap-4"):
             # ---------- Summary (top) ----------
             with ui.row().classes("items-center justify-between w-full"):
                 ui.label("Investigation Dashboard · AI Audit Results").classes(
                     "text-xl font-semibold"
                 )
-                ui.button(
-                    "Download JSON",
-                    on_click=lambda: ui.download(
-                        _download_json(report), filename="report.json"
-                    ),
-                )
 
-            with ui.card().classes("w-full"):
-                ui.label(report.get("summary", "Audit summary")).classes(
-                    "text-gray-700"
-                )
+            # Removed summary text display per request
 
             with ui.row().classes("w-full gap-3"):
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     ui.label(
                         str(report.get("metrics", {}).get("rules_total", 0))
@@ -164,8 +159,8 @@ def register_report_page(
                     ui.label("Rules Executed").classes("text-sm text-gray-600")
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     ui.label(str(report.get("metrics", {}).get("findings", 0))).classes(
                         "text-3xl font-semibold"
@@ -173,8 +168,8 @@ def register_report_page(
                     ui.label("Total Findings").classes("text-sm text-gray-600")
                 with (
                     ui.card()
-                    .props("flat bordered")
-                    .classes("flex-1 items-center justify-center p-4")
+                    .props("bordered")
+                    .classes("flex-1 items-center justify-center p-4 border border-gray-100")
                 ):
                     high = report.get("metrics", {}).get("critical", 0) + report.get(
                         "metrics", {}
@@ -183,16 +178,22 @@ def register_report_page(
                     ui.label("High-Risk Findings").classes("text-sm text-gray-600")
 
             # ---------- Visualization (middle) ----------
-            with ui.card().classes("w-full"):
-                ui.label("Compliance Risk Analysis").classes("text-lg font-semibold")
-                ui.label(
-                    "Size indicates anomaly count, color shows risk level."
-                ).classes("text-sm text-gray-600")
-                ui.echart(_treemap_options_from_report(report)).classes("w-full").style(
-                    "height: 360px"
+            # Remove padding around the chart while keeping tidy padding for text/legend
+            with ui.card().props("bordered").classes("w-full p-0 card-zero-pad border border-gray-100"):
+                with ui.column().classes("p-4 pb-2"):
+                    ui.label("Compliance Risk Analysis").classes(
+                        "text-lg font-semibold"
+                    )
+                    ui.label(
+                        "Size indicates anomaly count, color shows risk level."
+                    ).classes("text-sm text-gray-600")
+                ui.echart(_treemap_options_from_report(report)).classes(
+                    "w-full p-0 -mt-6 -mb-6"
+                ).style(
+                    "height: 360px; margin-top: -24px; margin-bottom: -24px; padding: 0"
                 )
 
-                with ui.row().classes("items-center gap-4 pt-2"):
+                with ui.row().classes("items-center gap-4 p-4 pt-2"):
                     # legend
                     for label, color in [
                         ("High Risk", SEV_COLOR["high"]),
@@ -210,10 +211,14 @@ def register_report_page(
             COLUMNS = ["Issues", "In Progress", "Pending Review", "Resolved"]
 
             # Seed simple cases from the report if none in session
+            # Normalize any previously stored cases from older schema
             def _seed_cases(report: dict, limit: int = 6) -> list[dict]:
                 cases: list[dict] = []
                 i = 1
-                for f in report.get("findings", []):
+                # prefer raw.findings if available (current report shape)
+                for f in report.get("raw", {}).get("findings", []) or report.get(
+                    "findings", []
+                ):
                     count = int(f.get("count", 0))
                     if count <= 0:
                         continue
@@ -247,7 +252,24 @@ def register_report_page(
                 return cases
 
             # session-backed cases
-            cases = store.get("cases") or _seed_cases(report)
+            status_map = {
+                "new": "Issues",
+                "in_progress": "In Progress",
+                "review": "Pending Review",
+                "resolved": "Resolved",
+                # collapse extra statuses into closest columns
+                "suspicious": "Issues",
+                "compliance": "Pending Review",
+            }
+
+            cases = store.get("cases")
+            if not cases:
+                cases = _seed_cases(report)
+            else:
+                # migrate any old statuses to current column names
+                for c in cases:
+                    s = (c.get("status") or "").strip()
+                    c["status"] = status_map.get(s, s if s in COLUMNS else "Issues")
             store["cases"] = cases
 
             # board view and containers
@@ -286,33 +308,50 @@ def register_report_page(
                     box = col_boxes[col]
                     box.clear()
                     col_counts[col].text = str(len(board[col]))
-                    for c in board[col]:
-                        with ui.card().classes("w-full mb-3 rounded-xl shadow-sm"):
-                            ui.label(c["id"]).classes("text-[11px] text-gray-500")
-                            ui.label(c["title"]).classes("text-sm font-medium")
-                            with ui.row().classes(
-                                "items-center justify-between w-full mt-1"
-                            ):
-                                with ui.row().classes("items-center gap-2"):
-                                    risk_badge(c["risk"])
-                                    ui.label(c["amount"]).classes(
-                                        "text-xs text-gray-500"
+                    # ensure cards are created inside the column container
+                    with box:
+                        for c in board[col]:
+                            # Compact, outlined item cards with slight radius and gray border
+                            item_card = (
+                                ui.card()
+                                .props("flat bordered")
+                                .classes(
+                                    "w-full mb-0 rounded border border-gray-200 bg-white p-3"
+                                )
+                            )
+                            with item_card:
+                                with ui.column().classes("w-full gap-1"):
+                                    ui.label(c["id"]).classes(
+                                        "text-[11px] text-gray-500"
                                     )
-                                # Move menu
-                                with ui.button("Move").props("flat dense") as btn:
-                                    pass
-                                with ui.menu().props(
-                                    'anchor="bottom right" self="top right"'
-                                ):
-                                    for dest in COLUMNS:
-                                        ui.menu_item(
-                                            dest,
-                                            on_click=lambda _=None,
-                                            cid=c["id"],
-                                            d=dest: move_case(cid, d),
-                                        )
+                                    ui.label(c["title"]).classes(
+                                        "text-sm font-medium"
+                                    )
+                                    with ui.row().classes(
+                                        "items-center justify-between w-full mt-0.5"
+                                    ):
+                                        with ui.row().classes("items-center gap-2"):
+                                            risk_badge(c["risk"])
+                                            ui.label(c["amount"]).classes(
+                                                "text-xs text-gray-500"
+                                            )
+                                        # Move menu
+                                        with ui.button("Move").props(
+                                            "flat dense"
+                                        ) as btn:
+                                            pass
+                                        with ui.menu().props(
+                                            'anchor="bottom right" self="top right"'
+                                        ):
+                                            for dest in COLUMNS:
+                                                ui.menu_item(
+                                                    dest,
+                                                    on_click=lambda _=None,
+                                                    cid=c["id"],
+                                                    d=dest: move_case(cid, d),
+                                                )
 
-            with ui.card().classes("w-full rounded-2xl"):
+            with ui.card().props("bordered").classes("w-full rounded-2xl border border-gray-100"):
                 with ui.row().classes("items-center justify-between w-full"):
                     ui.label("Investigation Kanban Board").classes(
                         "text-lg font-semibold"
@@ -324,7 +363,27 @@ def register_report_page(
 
                 with ui.row().classes("w-full gap-4"):
                     for col in COLUMNS:
-                        with ui.card().classes("flex-1 rounded-xl"):
+                        # Faint background per column + outlined container
+                        bg_map = {
+                            "Issues": "bg-blue-50",
+                            "In Progress": "bg-yellow-50",
+                            "Pending Review": "bg-purple-50",
+                            "Resolved": "bg-green-50",
+                        }
+                        border_map = {
+                            "Issues": "border-blue-200",
+                            "In Progress": "border-yellow-200",
+                            "Pending Review": "border-purple-200",
+                            "Resolved": "border-green-200",
+                        }
+                        column_card = (
+                            ui.card()
+                            .props("flat bordered")
+                            .classes(
+                                f"flex-1 rounded-xl border {border_map.get(col, 'border-gray-300')} {bg_map.get(col, '')}"
+                            )
+                        )
+                        with column_card:
                             with ui.row().classes("items-center justify-between"):
                                 ui.label(col).classes("text-sm font-semibold")
                                 col_counts[col] = ui.label(
