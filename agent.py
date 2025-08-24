@@ -8,7 +8,6 @@ import pandas as pd
 from openai.types.shared import Reasoning as ReasoningConfig  # SDK "Reasoning" config
 from agents import (
     Agent,
-    ItemHelpers,
     MessageOutputItem,
     ModelSettings,
     ReasoningItem,
@@ -187,7 +186,9 @@ class AuditRunHooks(RunHooks[AuditContext]):
         tool,
         result: str,
     ) -> None:
-        preview = ItemHelpers.item_preview(result)
+        preview = (result if isinstance(result, str) else str(result))[:80].replace(
+            "\n", " "
+        )
         print(
             f"[tool_end] {{'agent': '{agent.name}', 'tool': '{tool.name}', 'result_preview': '{preview}'}}"
         )
@@ -210,6 +211,9 @@ def _extract_reasoning_summary_text(item: ReasoningItem) -> Optional[str]:
             return " ".join(texts)
     # Fallback: stringify raw (short)
     return None
+
+
+""""""
 
 
 async def stream_run(
@@ -246,25 +250,26 @@ async def stream_run(
                 continue
 
             if isinstance(item, ToolCallItem):
+                tool_name = type(item).__name__
                 yield {
                     "type": "tool_called",
-                    "tool": item.tool.name,
-                    "args": item.tool_args,
+                    "tool": tool_name,
                 }
                 continue
 
             if isinstance(item, ToolCallOutputItem):
+                tool_name = type(item).__name__
                 yield {
                     "type": "tool_output",
-                    "tool": item.tool.name,
-                    "output_preview": ItemHelpers.item_preview(item),
+                    "tool": tool_name,
+                    "output_preview": (str(item)[:80]).replace("\n", " "),
                 }
                 continue
 
             if isinstance(item, MessageOutputItem):
                 yield {
                     "type": "assistant_message",
-                    "text_preview": ItemHelpers.item_preview(item),
+                    "text_preview": (str(item)[:80]).replace("\n", " "),
                 }
                 continue
 
@@ -274,7 +279,8 @@ async def stream_run(
             pass
 
     # Final output payload for convenience
-    yield {"type": "done", "final_output": result.final_output, "usage": result.usage}
+    usage = getattr(result, "usage", None)
+    yield {"type": "done", "final_output": result.final_output, "usage": usage}
 
 
 # ---------- CLI entrypoint ----------
