@@ -1,8 +1,27 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 import pandas as pd
 from pydantic import BaseModel
 from agents import Agent, Runner, function_tool, RunContextWrapper
+
+# ---------- Optional tool event emitter (set by runtime for UI streaming) ----------
+ToolEvent = Dict[str, Any]
+ToolEventEmitter = Callable[[str, ToolEvent], None]
+_TOOL_EVENT_EMITTER: Optional[ToolEventEmitter] = None
+
+
+def set_tool_event_emitter(emitter: Optional[ToolEventEmitter]) -> None:
+    global _TOOL_EVENT_EMITTER
+    _TOOL_EVENT_EMITTER = emitter
+
+
+def _emit_tool(event_type: str, payload: ToolEvent) -> None:
+    try:
+        if _TOOL_EVENT_EMITTER:
+            _TOOL_EVENT_EMITTER(event_type, payload)
+    except Exception:
+        # never let UI wiring break tool execution
+        pass
 
 
 # ---------- Context to share state across tools ----------
@@ -130,8 +149,14 @@ def load_csv(ctx: RunContextWrapper[AuditContext], name: str, path: str) -> str:
         name: Short handle, e.g. 'jes' or 'vendors'
         path: File path to CSV
     """
+    _emit_tool("tool_call", {"name": "load_csv", "args": {"name": name, "path": path}})
     ctx.context.tables[name] = pd.read_csv(path)
-    return f"Loaded {name} with {len(ctx.context.tables[name])} rows."
+    summary = f"Loaded {name} with {len(ctx.context.tables[name])} rows."
+    _emit_tool(
+        "tool_result",
+        {"name": "load_csv", "ok": True, "summary": summary, "ms": 0},
+    )
+    return summary
 
 
 @function_tool
@@ -143,9 +168,31 @@ def je_same_user_post_approve(
     approved_by_col: str = "approved_by",
 ) -> str:
     """Flag JEs where poster == approver."""
+    _emit_tool(
+        "tool_call",
+        {
+            "name": "je_same_user_post_approve",
+            "args": {
+                "table": table,
+                "id_col": id_col,
+                "posted_by_col": posted_by_col,
+                "approved_by_col": approved_by_col,
+            },
+        },
+    )
     df = _require(ctx, table)
     finding = compute_je_same_user_post_approve(
         df, id_col=id_col, posted_by_col=posted_by_col, approved_by_col=approved_by_col
+    )
+    _emit_tool(
+        "tool_result",
+        {
+            "name": "je_same_user_post_approve",
+            "ok": True,
+            "summary": f"{finding.count} matches",
+            "finding": finding.model_dump(),
+            "ms": 0,
+        },
     )
     return finding.model_dump_json()
 
@@ -159,9 +206,31 @@ def p2p_duplicate_invoices(
     amt_col: str = "amount",
 ) -> str:
     """Detect duplicate invoices: same vendor + invoice_no + amount."""
+    _emit_tool(
+        "tool_call",
+        {
+            "name": "p2p_duplicate_invoices",
+            "args": {
+                "table": table,
+                "vendor_col": vendor_col,
+                "inv_col": inv_col,
+                "amt_col": amt_col,
+            },
+        },
+    )
     df = _require(ctx, table)
     finding = compute_p2p_duplicate_invoices(
         df, vendor_col=vendor_col, inv_col=inv_col, amt_col=amt_col
+    )
+    _emit_tool(
+        "tool_result",
+        {
+            "name": "p2p_duplicate_invoices",
+            "ok": True,
+            "summary": f"{finding.count} duplicate groups",
+            "finding": finding.model_dump(),
+            "ms": 0,
+        },
     )
     return finding.model_dump_json()
 
@@ -176,9 +245,32 @@ def fictitious_vendors(
     v_id: str = "vendor_id",
 ) -> str:
     """Vendor address matches an employee address."""
+    _emit_tool(
+        "tool_call",
+        {
+            "name": "fictitious_vendors",
+            "args": {
+                "vendor_table": vendor_table,
+                "emp_table": emp_table,
+                "v_addr": v_addr,
+                "e_addr": e_addr,
+                "v_id": v_id,
+            },
+        },
+    )
     v = _require(ctx, vendor_table)
     e = _require(ctx, emp_table)
     finding = compute_fictitious_vendors(v, e, v_addr=v_addr, e_addr=e_addr, v_id=v_id)
+    _emit_tool(
+        "tool_result",
+        {
+            "name": "fictitious_vendors",
+            "ok": True,
+            "summary": f"{finding.count} address matches",
+            "finding": finding.model_dump(),
+            "ms": 0,
+        },
+    )
     return finding.model_dump_json()
 
 
@@ -192,10 +284,33 @@ def terminated_users_with_access(
     active_flag: str = "active",
 ) -> str:
     """Terminated employees who still have active access."""
+    _emit_tool(
+        "tool_call",
+        {
+            "name": "terminated_users_with_access",
+            "args": {
+                "ua_table": ua_table,
+                "users_table": users_table,
+                "user_id": user_id,
+                "status_col": status_col,
+                "active_flag": active_flag,
+            },
+        },
+    )
     ua = _require(ctx, ua_table)
     emp = _require(ctx, users_table)
     finding = compute_terminated_users_with_access(
         ua, emp, user_id=user_id, status_col=status_col, active_flag=active_flag
+    )
+    _emit_tool(
+        "tool_result",
+        {
+            "name": "terminated_users_with_access",
+            "ok": True,
+            "summary": f"{finding.count} active accounts",
+            "finding": finding.model_dump(),
+            "ms": 0,
+        },
     )
     return finding.model_dump_json()
 
@@ -203,10 +318,20 @@ def terminated_users_with_access(
 @function_tool
 def compile_report(findings_json: List[str]) -> str:
     """Combine tool outputs (JSON strings) into a single AuditReport JSON."""
+    _emit_tool("tool_call", {"name": "compile_report", "args": {"n": len(findings_json)}})
     parsed = [Finding.model_validate_json(f) for f in findings_json]
     total_flags = sum(f.count for f in parsed)
     report = AuditReport(
         findings=parsed, summary=f"{len(parsed)} tests run, {total_flags} total flags."
+    )
+    _emit_tool(
+        "tool_result",
+        {
+            "name": "compile_report",
+            "ok": True,
+            "summary": report.summary,
+            "ms": 0,
+        },
     )
     return report.model_dump_json()
 

@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+import os
+import json
 import pandas as pd
 from datetime import datetime
 from agent import (
@@ -15,6 +17,10 @@ from agent import (
     compute_fictitious_vendors,
     compute_terminated_users_with_access,
     Finding,
+    AuditContext,
+    auditor,
+    Runner,
+    set_tool_event_emitter,
 )
 
 EventType = Literal[
@@ -263,6 +269,11 @@ async def run_engine(files: List[Path]) -> None:
 # - Emits UI-compatible events (rule_started, tool_call/result, rule_status, rule_completed, overall)
 async def run_agent(files: List[Path]) -> None:
     try:
+        # Route to live OpenAI agent if enabled via env flag
+        if str(os.getenv("LIVE_AGENT", "")).strip().lower() in {"1", "true", "yes"}:
+            await run_agent_live(files)
+            return
+
         table_paths = validate_and_map_files(files)
 
         # Preload datasets once using pandas (decoupled from agent wrappers)
@@ -605,3 +616,299 @@ async def run_agent(files: List[Path]) -> None:
         # Emit a terminal failure and finish to avoid UI hanging
         await emit(Event("rule_failed", rule_id=None, data={"error": str(e)}))
         await emit(Event("done"))
+
+
+async def run_agent_live(files: List[Path]) -> None:
+    """Live path using the Agent + Runner with tool event forwarding.
+
+    Emits rule lifecycle events aligned to DUMMY_RULES based on tool names.
+    """
+    try:
+        table_paths = validate_and_map_files(files)
+
+        # Prepare overall progress tracking
+        total = len(DUMMY_RULES)
+        completed = 0
+        total_findings = 0
+        await emit(
+            Event(
+                "overall",
+                data={"completed": completed, "total": total, "findings": total_findings},
+            )
+        )
+
+        # Helper maps
+        rule_by_id: Dict[str, Dict[str, Any]] = {r["id"]: r for r in DUMMY_RULES}
+        rid_by_tool: Dict[str, str] = {v: k for k, v in RULE_TO_TOOL.items()}
+        started: Dict[str, float] = {}
+        finished: set[str] = set()
+
+        async def start_rule_if_needed(tool_name: str) -> Optional[str]:
+            rid = rid_by_tool.get(tool_name)
+            if not rid:
+                return None
+            if rid not in started:
+                started[rid] = time.perf_counter()
+                rule = rule_by_id.get(rid, {})
+                await emit(
+                    Event(
+                        "rule_started",
+                        rule_id=rid,
+                        data={"title": rule.get("title", ""), "tag": rule.get("tag", "")},
+                    )
+                )
+                await emit(
+                    Event("rule_status", rule_id=rid, data={"text": f"LLM: invoking {tool_name}"})
+                )
+            return rid
+
+        # Emitter that the tools will call; forward to UI bus
+        def _agent_emitter(event_type: str, payload: Dict[str, Any]) -> None:
+            try:
+                name = payload.get("name", "")
+                if name == "load_csv":
+                    # don't spam UI with setup tool noise for now
+                    return
+                if event_type == "tool_call":
+                    rid = rid_by_tool.get(name)
+                    # schedule async start + tool_call
+                    async def _do() -> None:
+                        r = await start_rule_if_needed(name)
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=r,
+                                data={"name": name, "args": payload.get("args", {})},
+                            )
+                        )
+
+                    asyncio.create_task(_do())
+                elif event_type == "tool_result":
+                    rid = rid_by_tool.get(name)
+                    finding = payload.get("finding") or {}
+                    count = int(finding.get("count", 0)) if isinstance(finding, dict) else 0
+                    summary = payload.get("summary", "")
+
+                    async def _do() -> None:
+                        r = await start_rule_if_needed(name)
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=r,
+                                data={
+                                    "name": name,
+                                    "ok": bool(payload.get("ok", True)),
+                                    "summary": summary,
+                                    "ms": int(payload.get("ms", 0) or 0),
+                                },
+                            )
+                        )
+                        # close out the rule
+                        if r and r not in finished:
+                            finished.add(r)
+                            nonlocal completed, total_findings
+                            completed += 1
+                            total_findings += count
+                            dur_ms = int((time.perf_counter() - started.get(r, time.perf_counter())) * 1000)
+                            await emit(
+                                Event(
+                                    "rule_completed",
+                                    rule_id=r,
+                                    data={"findings": count, "ms": dur_ms},
+                                )
+                            )
+                            await emit(
+                                Event(
+                                    "overall",
+                                    data={
+                                        "completed": completed,
+                                        "total": total,
+                                        "findings": total_findings,
+                                    },
+                                )
+                            )
+
+                    asyncio.create_task(_do())
+            except Exception:
+                # swallow emitter errors
+                pass
+
+        # Register tool event emitter
+        set_tool_event_emitter(_agent_emitter)
+
+        # Build the agent plan using actual file paths
+        steps = []
+        for fname, table in EXPECTED_FILE_TABLE.items():
+            if table in table_paths:
+                steps.append(
+                    f"load_csv(name='{table}', path='{str(table_paths[table])}')"
+                )
+        checks = [
+            "je_same_user_post_approve",
+            "p2p_duplicate_invoices",
+            "fictitious_vendors",
+            "terminated_users_with_access",
+        ]
+        plan = (
+            "1) "
+            + "\n2) ".join(steps)
+            + "\nThen run "
+            + ", ".join(checks)
+            + ", and compile_report on their outputs. Return only the JSON."
+        )
+
+        # Run the agent with best-effort token streaming
+        ctx = AuditContext()
+
+        # Token streaming adapter (best effort; falls back quietly if unsupported)
+        token_buf: List[str] = []
+        last_emit = time.perf_counter()
+
+        def _schedule_status(msg: str) -> None:
+            async def _do() -> None:
+                await emit(Event("rule_status", rule_id=None, data={"text": f"LLM: {msg}"}))
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(asyncio.create_task, _do())
+            except RuntimeError:
+                pass
+
+        def _flush_tokens(force: bool = False) -> None:
+            nonlocal token_buf, last_emit
+            if not token_buf:
+                return
+            now = time.perf_counter()
+            if force or (now - last_emit) > 0.4 or len(token_buf) >= 16:
+                text = "".join(token_buf).strip()
+                token_buf = []
+                last_emit = now
+                if text:
+                    _schedule_status(text)
+
+        def on_token(tok: str) -> None:
+            # Accept small token fragments or words
+            token_buf.append(tok)
+            if tok.endswith("\n") or tok.endswith("."):
+                _flush_tokens(force=True)
+            else:
+                _flush_tokens(force=False)
+
+        try:
+            # Try passing streaming hooks directly
+            result = await Runner.run(
+                auditor, input=plan, context=ctx, stream=True, on_token=on_token
+            )
+        except TypeError:
+            # Fallback: try a stream() API if available
+            if hasattr(Runner, "stream"):
+                try:
+                    stream = Runner.stream(auditor, input=plan, context=ctx)
+                    # support async or sync iterator
+                    if hasattr(stream, "__anext__"):
+                        async for ev in stream:  # type: ignore
+                            if isinstance(ev, str):
+                                on_token(ev)
+                    else:
+                        for ev in stream:  # type: ignore
+                            if isinstance(ev, str):
+                                on_token(ev)
+                except Exception:
+                    pass
+            # Final non-streaming run to produce output
+            result = await Runner.run(auditor, input=plan, context=ctx)
+
+        # Flush any residual tokens
+        _flush_tokens(force=True)
+
+        # Close out any rules that didn't get tool_result for safety
+        for rid in [r["id"] for r in DUMMY_RULES if r["id"] not in finished]:
+            rule = rule_by_id[rid]
+            if rid not in started:
+                await emit(
+                    Event(
+                        "rule_started",
+                        rule_id=rid,
+                        data={"title": rule.get("title", ""), "tag": rule.get("tag", "")},
+                    )
+                )
+                await emit(
+                    Event(
+                        "rule_status",
+                        rule_id=rid,
+                        data={"text": "No tool implemented for this rule yet"},
+                    )
+                )
+            await emit(
+                Event("rule_completed", rule_id=rid, data={"findings": 0, "ms": 0})
+            )
+            completed += 1
+            await emit(
+                Event(
+                    "overall",
+                    data={
+                        "completed": completed,
+                        "total": total,
+                        "findings": total_findings,
+                    },
+                )
+            )
+
+        # Parse the agent's final output as the audit report
+        report_raw: Dict[str, Any] = {}
+        try:
+            report_raw = json.loads(result.final_output or "{}")
+        except Exception:
+            report_raw = {"findings": [], "summary": "Agent returned non-JSON output"}
+
+        audit_findings = [
+            f if isinstance(f, dict) else {}
+            for f in (report_raw.get("findings") or [])
+        ]
+        total_flags = sum(int(f.get("count", 0) or 0) for f in audit_findings)
+
+        def sev_sum(level: str) -> int:
+            return sum(
+                int(f.get("count", 0) or 0)
+                for f in audit_findings
+                if str(f.get("severity", "")).lower() == level
+            )
+
+        report = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": report_raw.get("summary", f"{len(audit_findings)} tests run, {total_flags} total flags."),
+            "metrics": {
+                "rules_total": len(audit_findings),
+                "findings": total_flags,
+                "critical": sev_sum("critical"),
+                "high": sev_sum("high"),
+                "medium": sev_sum("medium"),
+            },
+            "action_items": [
+                {
+                    "title": f"Review {f.get('test','Finding')} ({int(f.get('count',0) or 0)} findings)",
+                    "owner": "You",
+                    "due": "Today",
+                }
+                for f in audit_findings
+                if int(f.get("count", 0) or 0) > 0
+            ],
+            "raw": {
+                "findings": audit_findings,
+                "summary": report_raw.get("summary", ""),
+            },
+        }
+
+        await emit(Event("done", data={"report": report}))
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        await emit(Event("rule_failed", rule_id=None, data={"error": str(e)}))
+        await emit(Event("done"))
+    finally:
+        # detach emitter to avoid leaking into future runs
+        try:
+            set_tool_event_emitter(None)
+        except Exception:
+            pass
