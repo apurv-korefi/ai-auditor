@@ -47,6 +47,52 @@ DUMMY_RULES: List[Dict[str, Any]] = [
     {"id": "AUD-007", "title": "Missing Evidence Attachments", "tag": "Audit"},
 ]
 
+# ---- Step 1: file validation + rule-to-tool mapping (no behavior change yet) ----
+
+# Expected uploads (filename -> logical table name used by agent tools)
+EXPECTED_FILE_TABLE: Dict[str, str] = {
+    "journal_entries.csv": "jes",
+    "invoices.csv": "invoices",
+    "vendors.csv": "vendors",
+    "employees.csv": "employees",
+    "user_access.csv": "user_access",
+}
+
+
+def validate_and_map_files(files: List[Path]) -> Dict[str, Path]:
+    """Validate uploaded files and map to logical table names.
+
+    - Only known filenames are allowed; raise on unknown names.
+    - Returns a mapping: table_name -> file_path
+    """
+    table_to_path: Dict[str, Path] = {}
+    allowed = set(EXPECTED_FILE_TABLE.keys())
+
+    for p in files:
+        name = p.name
+        if name not in allowed:
+            raise ValueError(
+                f"Unsupported file '{name}'. Allowed: {sorted(allowed)}"
+            )
+        table = EXPECTED_FILE_TABLE[name]
+        table_to_path[table] = p
+
+    return table_to_path
+
+
+# Map UI rule headings (dummy rule ids) to concrete agent checks
+# Value is the agent tool identifier we will call later.
+RULE_TO_TOOL: Dict[str, str] = {
+    # Segregation of Duties -> JE same user posted & approved
+    "UAR-002": "je_same_user_post_approve",
+    # Terminated User Access Testing -> terminated users with access
+    "UAR-001": "terminated_users_with_access",
+    # Unusual High-Value Transfers -> duplicate invoices (P2P)
+    "TXN-101": "p2p_duplicate_invoices",
+    # Generic audit bucket -> fictitious vendors
+    "AUD-007": "fictitious_vendors",
+}
+
 
 async def run_engine(files: List[Path]) -> None:
     try:
