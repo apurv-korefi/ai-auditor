@@ -337,7 +337,7 @@ async def run_agent_live(files: List[Path]) -> None:
             if preview:
                 await emit(Event("rule_status", data={"text": f"LLM: {preview}"}))
         elif et == "done":
-            # Try to convert final_output JSON -> UI report shape
+            # Try to convert final_output JSON -> UI report shape; always emit a report
             report_payload: Optional[Dict[str, Any]] = None
             try:
                 import json as _json
@@ -379,8 +379,20 @@ async def run_agent_live(files: List[Path]) -> None:
             except Exception:
                 report_payload = None
 
-            if report_payload:
-                await emit(Event("done", data={"report": report_payload}))
-            else:
-                await emit(Event("done"))
+            if not report_payload:
+                # Provide a minimal empty report so the UI can proceed without a mock builder
+                report_payload = {
+                    "generated_at": datetime.now().isoformat(timespec="seconds"),
+                    "summary": "Run completed. No findings parsed.",
+                    "metrics": {
+                        "rules_total": 0,
+                        "findings": 0,
+                        "critical": 0,
+                        "high": 0,
+                        "medium": 0,
+                    },
+                    "action_items": [],
+                    "raw": {"findings": [], "summary": "No results parsed"},
+                }
 
+            await emit(Event("done", data={"report": report_payload}))

@@ -8,74 +8,7 @@ from typing import Callable, Optional
 from nicegui import ui
 from processing_runtime import EVENT_BUS, run_agent
 
-from datetime import datetime
 
-
-def build_mock_report_from_audit() -> dict:
-    audit = {
-        "findings": [
-            {
-                "test": "JE same user posted & approved",
-                "severity": "high",
-                "count": 9,
-                "sample_ids": ["JE-0009", "JE-0099"],
-                "notes": None,
-            },
-            {
-                "test": "P2P duplicate invoices",
-                "severity": "high",
-                "count": 99,
-                "sample_ids": ["INV-0099", "INV-0999"],
-                "notes": None,
-            },
-            {
-                "test": "Fictitious vendor (address match)",
-                "severity": "medium",
-                "count": 999,
-                "sample_ids": ["V-0009", "V-0099", "V-0999"],
-                "notes": None,
-            },
-            {
-                "test": "Terminated users with access",
-                "severity": "critical",
-                "count": 9,
-                "sample_ids": ["U-0009", "U-0099"],
-                "notes": None,
-            },
-        ],
-        # summary recomputed below; keep placeholder for structure
-        "summary": "",
-    }
-
-    total_rules = len(audit["findings"])
-    total_flags = sum(item["count"] for item in audit["findings"])
-    sev = lambda s: sum(
-        item["count"] for item in audit["findings"] if item["severity"].lower() == s
-    )
-
-    report = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "summary": f"{total_rules} tests run, {total_flags} total flags.",
-        "metrics": {
-            "rules_total": total_rules,
-            "findings": total_flags,
-            "critical": sev("critical"),
-            "high": sev("high"),
-            "medium": sev("medium"),
-        },
-        "action_items": [
-            {
-                "title": f"Review {item['test']} ({item['count']} findings)",
-                "owner": "You",
-                "due": "Today",
-            }
-            for item in audit["findings"]
-            if item["count"] > 0
-        ],
-        # keep raw for later drilldowns if you want
-        "raw": audit,
-    }
-    return report
 
 
 def register_processing_page(
@@ -258,13 +191,17 @@ def register_processing_page(
                             return
 
                     elif ev.type == "done":
-                        # prefer real report from engine; fallback to mock
+                        # expect a real report from engine
                         if ev.data and ev.data.get("report"):
                             store["report"] = ev.data.get("report")
+                            next_btn.enable()
+                            current_status.text = "All rules finished"
                         else:
-                            store["report"] = build_mock_report_from_audit()
-                        next_btn.enable()
-                        current_status.text = "All rules finished"
+                            current_status.text = "Finished without report"
+                            ui.notify(
+                                "Run finished but no report was returned.",
+                                type="warning",
+                            )
                         try:
                             rule_log.push("Run finished")
                         except RuntimeError:
