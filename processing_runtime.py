@@ -7,6 +7,21 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+import os
+import json
+import pandas as pd
+from datetime import datetime
+from agent import (
+    compute_je_same_user_post_approve,
+    compute_p2p_duplicate_invoices,
+    compute_fictitious_vendors,
+    compute_terminated_users_with_access,
+    Finding,
+    AuditContext,
+    auditor,
+    Runner,
+    set_tool_event_emitter,
+)
 
 EventType = Literal[
     "overall",
@@ -46,6 +61,52 @@ DUMMY_RULES: List[Dict[str, Any]] = [
     {"id": "TXN-101", "title": "Unusual High-Value Transfers", "tag": "Fraud"},
     {"id": "AUD-007", "title": "Missing Evidence Attachments", "tag": "Audit"},
 ]
+
+# ---- Step 1: file validation + rule-to-tool mapping (no behavior change yet) ----
+
+# Expected uploads (filename -> logical table name used by agent tools)
+EXPECTED_FILE_TABLE: Dict[str, str] = {
+    "journal_entries.csv": "jes",
+    "invoices.csv": "invoices",
+    "vendors.csv": "vendors",
+    "employees.csv": "employees",
+    "user_access.csv": "user_access",
+}
+
+
+def validate_and_map_files(files: List[Path]) -> Dict[str, Path]:
+    """Validate uploaded files and map to logical table names.
+
+    - Only known filenames are allowed; raise on unknown names.
+    - Returns a mapping: table_name -> file_path
+    """
+    table_to_path: Dict[str, Path] = {}
+    allowed = set(EXPECTED_FILE_TABLE.keys())
+
+    for p in files:
+        name = p.name
+        if name not in allowed:
+            raise ValueError(
+                f"Unsupported file '{name}'. Allowed: {sorted(allowed)}"
+            )
+        table = EXPECTED_FILE_TABLE[name]
+        table_to_path[table] = p
+
+    return table_to_path
+
+
+# Map UI rule headings (dummy rule ids) to concrete agent checks
+# Value is the agent tool identifier we will call later.
+RULE_TO_TOOL: Dict[str, str] = {
+    # Segregation of Duties -> JE same user posted & approved
+    "UAR-002": "je_same_user_post_approve",
+    # Terminated User Access Testing -> terminated users with access
+    "UAR-001": "terminated_users_with_access",
+    # Unusual High-Value Transfers -> duplicate invoices (P2P)
+    "TXN-101": "p2p_duplicate_invoices",
+    # Generic audit bucket -> fictitious vendors
+    "AUD-007": "fictitious_vendors",
+}
 
 
 async def run_engine(files: List[Path]) -> None:
@@ -199,3 +260,655 @@ async def run_engine(files: List[Path]) -> None:
     except asyncio.CancelledError:
         # Swallow cancellation cleanly when user navigates away
         return
+
+
+# Agent-backed runtime (Step 2):
+# - Validates files
+# - Preloads CSVs
+# - Iterates DUMMY_RULES and runs mapped checks
+# - Emits UI-compatible events (rule_started, tool_call/result, rule_status, rule_completed, overall)
+async def run_agent(files: List[Path]) -> None:
+    try:
+        # Route to live OpenAI agent if enabled via env flag
+        if str(os.getenv("LIVE_AGENT", "")).strip().lower() in {"1", "true", "yes"}:
+            await run_agent_live(files)
+            return
+
+        table_paths = validate_and_map_files(files)
+
+        # Preload datasets once using pandas (decoupled from agent wrappers)
+        dfs: Dict[str, pd.DataFrame] = {}
+        for table, path in table_paths.items():
+            dfs[table] = pd.read_csv(path)
+
+        def has_tables(req: List[str]) -> Optional[str]:
+            missing = [t for t in req if t not in dfs]
+            return ", ".join(missing) if missing else None
+
+        async def _emit_thinking(rule_id: str, steps: List[str], delay: float = 0.1) -> None:
+            for t in steps:
+                await emit(Event("rule_status", rule_id=rule_id, data={"text": t}))
+                await asyncio.sleep(delay)
+
+        async def rule_lifecycle(
+            rid: str,
+            title: str,
+            tag: str,
+            fn: Optional[str],
+        ) -> Optional[Finding]:
+            start_ms = time.perf_counter()
+            await emit(Event("rule_started", rule_id=rid, data={"title": title, "tag": tag}))
+            await emit(Event("rule_status", rule_id=rid, data={"text": "Thinking..."}))
+            # Simulated LLM streaming thoughts for UX; can be replaced with real streaming later
+            await _emit_thinking(
+                rid,
+                [
+                    "LLM: reading inputs",
+                    "LLM: planning next step",
+                    f"LLM: selecting tool {fn}" if fn else "LLM: no suitable tool found",
+                ],
+                delay=0.08,
+            )
+
+            findings = 0
+            finding_model: Optional[Finding] = None
+            try:
+                if fn is None:
+                    await emit(
+                        Event(
+                            "rule_status",
+                            rule_id=rid,
+                            data={"text": "No tool implemented for this rule yet"},
+                        )
+                    )
+                elif fn == "je_same_user_post_approve":
+                    missing = has_tables(["jes"])
+                    if missing:
+                        await emit(
+                            Event(
+                                "rule_status",
+                                rule_id=rid,
+                                data={"text": f"Missing datasets: {missing}"},
+                            )
+                        )
+                    else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "args": {"table": "jes", "id_col": "je_id"},
+                                },
+                            )
+                        )
+                        df = dfs["jes"]
+                        posted_by_col = "posted_by"
+                        approved_by_col = "approved_by"
+                        id_col = "je_id"
+                        for col in [posted_by_col, approved_by_col, id_col]:
+                            if col not in df.columns:
+                                raise ValueError(f"Missing column '{col}' in jes")
+                        finding_obj = compute_je_same_user_post_approve(
+                            df, id_col=id_col, posted_by_col=posted_by_col, approved_by_col=approved_by_col
+                        )
+                        findings = int(finding_obj.count)
+                        finding_model = finding_obj
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "ok": True,
+                                    "summary": f"{findings} matches",
+                                    "ms": 0,
+                                },
+                            )
+                        )
+
+                elif fn == "p2p_duplicate_invoices":
+                    missing = has_tables(["invoices"])
+                    if missing:
+                        await emit(
+                            Event(
+                                "rule_status",
+                                rule_id=rid,
+                                data={"text": f"Missing datasets: {missing}"},
+                            )
+                        )
+                    else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "args": {
+                                        "table": "invoices",
+                                        "vendor_col": "vendor_id",
+                                        "inv_col": "invoice_no",
+                                        "amt_col": "amount",
+                                    },
+                                },
+                            )
+                        )
+                        df = dfs["invoices"]
+                        for col in ["vendor_id", "invoice_no", "amount"]:
+                            if col not in df.columns:
+                                raise ValueError(f"Missing column '{col}' in invoices")
+                        finding_obj = compute_p2p_duplicate_invoices(
+                            df, vendor_col="vendor_id", inv_col="invoice_no", amt_col="amount"
+                        )
+                        findings = int(finding_obj.count)
+                        finding_model = finding_obj
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "ok": True,
+                                    "summary": f"{findings} duplicate groups",
+                                    "ms": 0,
+                                },
+                            )
+                        )
+
+                elif fn == "fictitious_vendors":
+                    missing = has_tables(["vendors", "employees"])
+                    if missing:
+                        await emit(
+                            Event(
+                                "rule_status",
+                                rule_id=rid,
+                                data={"text": f"Missing datasets: {missing}"},
+                            )
+                        )
+                    else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "args": {
+                                        "vendor_table": "vendors",
+                                        "emp_table": "employees",
+                                    },
+                                },
+                            )
+                        )
+                        v = dfs["vendors"].copy()
+                        e = dfs["employees"].copy()
+                        for col in ["address"]:
+                            if col not in v.columns:
+                                raise ValueError("Missing column 'address' in vendors")
+                            if col not in e.columns:
+                                raise ValueError("Missing column 'address' in employees")
+                        if "vendor_id" not in v.columns:
+                            raise ValueError("Missing column 'vendor_id' in vendors")
+                        finding_obj = compute_fictitious_vendors(
+                            v, e, v_addr="address", e_addr="address", v_id="vendor_id"
+                        )
+                        findings = int(finding_obj.count)
+                        finding_model = finding_obj
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "ok": True,
+                                    "summary": f"{findings} address matches",
+                                    "ms": 0,
+                                },
+                            )
+                        )
+
+                elif fn == "terminated_users_with_access":
+                    missing = has_tables(["user_access", "employees"])
+                    if missing:
+                        await emit(
+                            Event(
+                                "rule_status",
+                                rule_id=rid,
+                                data={"text": f"Missing datasets: {missing}"},
+                            )
+                        )
+                    else:
+                        await emit(Event("rule_status", rule_id=rid, data={"text": "LLM: invoking tool"}))
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "args": {
+                                        "ua_table": "user_access",
+                                        "users_table": "employees",
+                                    },
+                                },
+                            )
+                        )
+                        ua = dfs["user_access"]
+                        emp = dfs["employees"]
+                        for col in ["user_id", "employment_status"]:
+                            if col not in emp.columns:
+                                raise ValueError(f"Missing column '{col}' in employees")
+                        if "user_id" not in ua.columns or "active" not in ua.columns:
+                            raise ValueError("Missing 'user_id' or 'active' in user_access")
+                        finding_obj = compute_terminated_users_with_access(
+                            ua, emp, user_id="user_id", status_col="employment_status", active_flag="active"
+                        )
+                        findings = int(finding_obj.count)
+                        finding_model = finding_obj
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=rid,
+                                data={
+                                    "name": fn,
+                                    "ok": True,
+                                    "summary": f"{findings} active accounts",
+                                    "ms": 0,
+                                },
+                            )
+                        )
+
+                else:
+                    await emit(
+                        Event(
+                            "rule_status",
+                            rule_id=rid,
+                            data={"text": f"Unknown tool mapping for {rid}"},
+                        )
+                    )
+
+                # finalize rule
+                dur_ms = int((time.perf_counter() - start_ms) * 1000)
+                await emit(
+                    Event(
+                        "rule_completed",
+                        rule_id=rid,
+                        data={"findings": findings, "ms": dur_ms},
+                    )
+                )
+                return finding_model
+            except Exception as e:
+                await emit(Event("rule_failed", rule_id=rid, data={"error": str(e)}))
+                return None
+
+        total_rules = len(DUMMY_RULES)
+        completed = 0
+        total_findings = 0
+        await emit(
+            Event(
+                "overall",
+                data={"completed": completed, "total": total_rules, "findings": total_findings},
+            )
+        )
+
+        # Iterate rules, using RULE_TO_TOOL where available
+        collected: List[Finding] = []
+        for rule in DUMMY_RULES:
+            rid = str(rule.get("id", ""))
+            title = str(rule.get("title", ""))
+            tag = str(rule.get("tag", ""))
+            tool = RULE_TO_TOOL.get(rid)
+            fobj = await rule_lifecycle(rid, title, tag, tool)
+            if fobj is not None:
+                collected.append(fobj)
+                total_findings += int(fobj.count)
+            completed += 1
+            await emit(
+                Event(
+                    "overall",
+                    data={
+                        "completed": completed,
+                        "total": total_rules,
+                        "findings": total_findings,
+                    },
+                )
+            )
+
+            await asyncio.sleep(0.05)
+
+        # Build an Audit-like report payload for UI
+        audit_findings = [f.model_dump() for f in collected]
+        total_flags = sum(int(f["count"]) for f in audit_findings)
+        audit = {
+            "findings": audit_findings,
+            "summary": f"{len(audit_findings)} tests run, {total_flags} total flags.",
+        }
+        def sev_sum(level: str) -> int:
+            return sum(int(f.get("count", 0)) for f in audit_findings if str(f.get("severity", "")).lower() == level)
+        report = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": audit["summary"],
+            "metrics": {
+                "rules_total": len(audit_findings),
+                "findings": total_flags,
+                "critical": sev_sum("critical"),
+                "high": sev_sum("high"),
+                "medium": sev_sum("medium"),
+            },
+            "action_items": [
+                {
+                    "title": f"Review {f['test']} ({f['count']} findings)",
+                    "owner": "You",
+                    "due": "Today",
+                }
+                for f in audit_findings
+                if int(f.get("count", 0)) > 0
+            ],
+            "raw": audit,
+        }
+
+        await emit(Event("done", data={"report": report}))
+    except asyncio.CancelledError:
+        # Swallow cancellation cleanly when user navigates away
+        return
+    except Exception as e:
+        # Emit a terminal failure and finish to avoid UI hanging
+        await emit(Event("rule_failed", rule_id=None, data={"error": str(e)}))
+        await emit(Event("done"))
+
+
+async def run_agent_live(files: List[Path]) -> None:
+    """Live path using the Agent + Runner with tool event forwarding.
+
+    Emits rule lifecycle events aligned to DUMMY_RULES based on tool names.
+    """
+    try:
+        table_paths = validate_and_map_files(files)
+
+        # Prepare overall progress tracking
+        total = len(DUMMY_RULES)
+        completed = 0
+        total_findings = 0
+        await emit(
+            Event(
+                "overall",
+                data={"completed": completed, "total": total, "findings": total_findings},
+            )
+        )
+
+        # Helper maps
+        rule_by_id: Dict[str, Dict[str, Any]] = {r["id"]: r for r in DUMMY_RULES}
+        rid_by_tool: Dict[str, str] = {v: k for k, v in RULE_TO_TOOL.items()}
+        started: Dict[str, float] = {}
+        finished: set[str] = set()
+
+        async def start_rule_if_needed(tool_name: str) -> Optional[str]:
+            rid = rid_by_tool.get(tool_name)
+            if not rid:
+                return None
+            if rid not in started:
+                started[rid] = time.perf_counter()
+                rule = rule_by_id.get(rid, {})
+                await emit(
+                    Event(
+                        "rule_started",
+                        rule_id=rid,
+                        data={"title": rule.get("title", ""), "tag": rule.get("tag", "")},
+                    )
+                )
+                await emit(
+                    Event("rule_status", rule_id=rid, data={"text": f"LLM: invoking {tool_name}"})
+                )
+            return rid
+
+        # Emitter that the tools will call; forward to UI bus
+        def _agent_emitter(event_type: str, payload: Dict[str, Any]) -> None:
+            try:
+                name = payload.get("name", "")
+                if name == "load_csv":
+                    # don't spam UI with setup tool noise for now
+                    return
+                if event_type == "tool_call":
+                    rid = rid_by_tool.get(name)
+                    # schedule async start + tool_call
+                    async def _do() -> None:
+                        r = await start_rule_if_needed(name)
+                        await emit(
+                            Event(
+                                "tool_call",
+                                rule_id=r,
+                                data={"name": name, "args": payload.get("args", {})},
+                            )
+                        )
+
+                    asyncio.create_task(_do())
+                elif event_type == "tool_result":
+                    rid = rid_by_tool.get(name)
+                    finding = payload.get("finding") or {}
+                    count = int(finding.get("count", 0)) if isinstance(finding, dict) else 0
+                    summary = payload.get("summary", "")
+
+                    async def _do() -> None:
+                        r = await start_rule_if_needed(name)
+                        await emit(
+                            Event(
+                                "tool_result",
+                                rule_id=r,
+                                data={
+                                    "name": name,
+                                    "ok": bool(payload.get("ok", True)),
+                                    "summary": summary,
+                                    "ms": int(payload.get("ms", 0) or 0),
+                                },
+                            )
+                        )
+                        # close out the rule
+                        if r and r not in finished:
+                            finished.add(r)
+                            nonlocal completed, total_findings
+                            completed += 1
+                            total_findings += count
+                            dur_ms = int((time.perf_counter() - started.get(r, time.perf_counter())) * 1000)
+                            await emit(
+                                Event(
+                                    "rule_completed",
+                                    rule_id=r,
+                                    data={"findings": count, "ms": dur_ms},
+                                )
+                            )
+                            await emit(
+                                Event(
+                                    "overall",
+                                    data={
+                                        "completed": completed,
+                                        "total": total,
+                                        "findings": total_findings,
+                                    },
+                                )
+                            )
+
+                    asyncio.create_task(_do())
+            except Exception:
+                # swallow emitter errors
+                pass
+
+        # Register tool event emitter
+        set_tool_event_emitter(_agent_emitter)
+
+        # Build the agent plan using actual file paths
+        steps = []
+        for fname, table in EXPECTED_FILE_TABLE.items():
+            if table in table_paths:
+                steps.append(
+                    f"load_csv(name='{table}', path='{str(table_paths[table])}')"
+                )
+        checks = [
+            "je_same_user_post_approve",
+            "p2p_duplicate_invoices",
+            "fictitious_vendors",
+            "terminated_users_with_access",
+        ]
+        plan = (
+            "1) "
+            + "\n2) ".join(steps)
+            + "\nThen run "
+            + ", ".join(checks)
+            + ", and compile_report on their outputs. Return only the JSON."
+        )
+
+        # Run the agent with best-effort token streaming
+        ctx = AuditContext()
+
+        # Token streaming adapter (best effort; falls back quietly if unsupported)
+        token_buf: List[str] = []
+        last_emit = time.perf_counter()
+
+        def _schedule_status(msg: str) -> None:
+            async def _do() -> None:
+                await emit(Event("rule_status", rule_id=None, data={"text": f"LLM: {msg}"}))
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(asyncio.create_task, _do())
+            except RuntimeError:
+                pass
+
+        def _flush_tokens(force: bool = False) -> None:
+            nonlocal token_buf, last_emit
+            if not token_buf:
+                return
+            now = time.perf_counter()
+            if force or (now - last_emit) > 0.4 or len(token_buf) >= 16:
+                text = "".join(token_buf).strip()
+                token_buf = []
+                last_emit = now
+                if text:
+                    _schedule_status(text)
+
+        def on_token(tok: str) -> None:
+            # Accept small token fragments or words
+            token_buf.append(tok)
+            if tok.endswith("\n") or tok.endswith("."):
+                _flush_tokens(force=True)
+            else:
+                _flush_tokens(force=False)
+
+        try:
+            # Try passing streaming hooks directly
+            result = await Runner.run(
+                auditor, input=plan, context=ctx, stream=True, on_token=on_token
+            )
+        except TypeError:
+            # Fallback: try a stream() API if available
+            if hasattr(Runner, "stream"):
+                try:
+                    stream = Runner.stream(auditor, input=plan, context=ctx)
+                    # support async or sync iterator
+                    if hasattr(stream, "__anext__"):
+                        async for ev in stream:  # type: ignore
+                            if isinstance(ev, str):
+                                on_token(ev)
+                    else:
+                        for ev in stream:  # type: ignore
+                            if isinstance(ev, str):
+                                on_token(ev)
+                except Exception:
+                    pass
+            # Final non-streaming run to produce output
+            result = await Runner.run(auditor, input=plan, context=ctx)
+
+        # Flush any residual tokens
+        _flush_tokens(force=True)
+
+        # Close out any rules that didn't get tool_result for safety
+        for rid in [r["id"] for r in DUMMY_RULES if r["id"] not in finished]:
+            rule = rule_by_id[rid]
+            if rid not in started:
+                await emit(
+                    Event(
+                        "rule_started",
+                        rule_id=rid,
+                        data={"title": rule.get("title", ""), "tag": rule.get("tag", "")},
+                    )
+                )
+                await emit(
+                    Event(
+                        "rule_status",
+                        rule_id=rid,
+                        data={"text": "No tool implemented for this rule yet"},
+                    )
+                )
+            await emit(
+                Event("rule_completed", rule_id=rid, data={"findings": 0, "ms": 0})
+            )
+            completed += 1
+            await emit(
+                Event(
+                    "overall",
+                    data={
+                        "completed": completed,
+                        "total": total,
+                        "findings": total_findings,
+                    },
+                )
+            )
+
+        # Parse the agent's final output as the audit report
+        report_raw: Dict[str, Any] = {}
+        try:
+            report_raw = json.loads(result.final_output or "{}")
+        except Exception:
+            report_raw = {"findings": [], "summary": "Agent returned non-JSON output"}
+
+        audit_findings = [
+            f if isinstance(f, dict) else {}
+            for f in (report_raw.get("findings") or [])
+        ]
+        total_flags = sum(int(f.get("count", 0) or 0) for f in audit_findings)
+
+        def sev_sum(level: str) -> int:
+            return sum(
+                int(f.get("count", 0) or 0)
+                for f in audit_findings
+                if str(f.get("severity", "")).lower() == level
+            )
+
+        report = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": report_raw.get("summary", f"{len(audit_findings)} tests run, {total_flags} total flags."),
+            "metrics": {
+                "rules_total": len(audit_findings),
+                "findings": total_flags,
+                "critical": sev_sum("critical"),
+                "high": sev_sum("high"),
+                "medium": sev_sum("medium"),
+            },
+            "action_items": [
+                {
+                    "title": f"Review {f.get('test','Finding')} ({int(f.get('count',0) or 0)} findings)",
+                    "owner": "You",
+                    "due": "Today",
+                }
+                for f in audit_findings
+                if int(f.get("count", 0) or 0) > 0
+            ],
+            "raw": {
+                "findings": audit_findings,
+                "summary": report_raw.get("summary", ""),
+            },
+        }
+
+        await emit(Event("done", data={"report": report}))
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        await emit(Event("rule_failed", rule_id=None, data={"error": str(e)}))
+        await emit(Event("done"))
+    finally:
+        # detach emitter to avoid leaking into future runs
+        try:
+            set_tool_event_emitter(None)
+        except Exception:
+            pass

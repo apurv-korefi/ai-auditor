@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from nicegui import ui
-from processing_runtime import EVENT_BUS, run_engine
+from processing_runtime import EVENT_BUS, run_agent
 
 from datetime import datetime
 
@@ -159,7 +159,7 @@ def register_processing_page(
             ui.navigate.to("/upload")
             return
 
-        engine_task: Optional[asyncio.Task] = asyncio.create_task(run_engine(files))
+        engine_task: Optional[asyncio.Task] = asyncio.create_task(run_agent(files))
 
         async def event_consumer() -> None:
             try:
@@ -246,15 +246,22 @@ def register_processing_page(
                             return
 
                     elif ev.type == "rule_failed":
+                        d = ev.data or {}
+                        err = d.get("error", "")
                         current_status.text = "Failed"
                         try:
-                            rule_log.push(f"Failed {ev.rule_id}")
+                            rule_log.push(
+                                f"Failed {ev.rule_id}: {err}" if err else f"Failed {ev.rule_id}"
+                            )
                         except RuntimeError:
                             return
 
                     elif ev.type == "done":
-                        # stash a mock report so /report can render immediately
-                        store["report"] = build_mock_report_from_audit()
+                        # prefer real report from engine; fallback to mock
+                        if ev.data and ev.data.get("report"):
+                            store["report"] = ev.data.get("report")
+                        else:
+                            store["report"] = build_mock_report_from_audit()
                         next_btn.enable()
                         current_status.text = "All rules finished"
                         try:
