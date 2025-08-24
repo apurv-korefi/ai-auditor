@@ -199,3 +199,9 @@ async def run_engine(files: List[Path]) -> None:
     except asyncio.CancelledError:
         # Swallow cancellation cleanly when user navigates away
         return
+
+
+# Temporary shim to integrate UI with an agent-backed runtime incrementally.
+# For now, delegate to the existing dummy engine to keep behavior unchanged.
+async def run_agent(files: List[Path]) -> None:
+    await run_engine(files)

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from nicegui import ui
-from processing_runtime import EVENT_BUS, run_engine
+from processing_runtime import EVENT_BUS, run_agent
 
 from datetime import datetime
 
@@ -159,7 +159,7 @@ def register_processing_page(
             ui.navigate.to("/upload")
             return
 
-        engine_task: Optional[asyncio.Task] = asyncio.create_task(run_engine(files))
+        engine_task: Optional[asyncio.Task] = asyncio.create_task(run_agent(files))
 
         async def event_consumer() -> None:
             try:
