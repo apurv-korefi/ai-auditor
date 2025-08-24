@@ -265,7 +265,7 @@ async def run_agent(files: List[Path]) -> None:
     try:
         table_paths = validate_and_map_files(files)
 
-        # Preload datasets once
+        # Preload datasets once using pandas (decoupled from agent wrappers)
         dfs: Dict[str, pd.DataFrame] = {}
         for table, path in table_paths.items():
             dfs[table] = pd.read_csv(path)
@@ -388,7 +388,9 @@ async def run_agent(files: List[Path]) -> None:
                         for col in ["vendor_id", "invoice_no", "amount"]:
                             if col not in df.columns:
                                 raise ValueError(f"Missing column '{col}' in invoices")
-                        finding_obj = compute_p2p_duplicate_invoices(df, vendor_col="vendor_id", inv_col="invoice_no", amt_col="amount")
+                        finding_obj = compute_p2p_duplicate_invoices(
+                            df, vendor_col="vendor_id", inv_col="invoice_no", amt_col="amount"
+                        )
                         findings = int(finding_obj.count)
                         finding_model = finding_obj
                         await emit(
@@ -438,7 +440,9 @@ async def run_agent(files: List[Path]) -> None:
                                 raise ValueError("Missing column 'address' in employees")
                         if "vendor_id" not in v.columns:
                             raise ValueError("Missing column 'vendor_id' in vendors")
-                        finding_obj = compute_fictitious_vendors(v, e, v_addr="address", e_addr="address", v_id="vendor_id")
+                        finding_obj = compute_fictitious_vendors(
+                            v, e, v_addr="address", e_addr="address", v_id="vendor_id"
+                        )
                         findings = int(finding_obj.count)
                         finding_model = finding_obj
                         await emit(

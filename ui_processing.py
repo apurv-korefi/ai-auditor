@@ -246,9 +246,13 @@ def register_processing_page(
                             return
 
                     elif ev.type == "rule_failed":
+                        d = ev.data or {}
+                        err = d.get("error", "")
                         current_status.text = "Failed"
                         try:
-                            rule_log.push(f"Failed {ev.rule_id}")
+                            rule_log.push(
+                                f"Failed {ev.rule_id}: {err}" if err else f"Failed {ev.rule_id}"
+                            )
                         except RuntimeError:
                             return
 
