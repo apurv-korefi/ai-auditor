@@ -17,33 +17,34 @@ def build_mock_report_from_audit() -> dict:
             {
                 "test": "JE same user posted & approved",
                 "severity": "high",
-                "count": 2,
-                "sample_ids": ["JE-0001", "JE-0004"],
+                "count": 9,
+                "sample_ids": ["JE-0009", "JE-0099"],
                 "notes": None,
             },
             {
                 "test": "P2P duplicate invoices",
                 "severity": "high",
-                "count": 0,
-                "sample_ids": [],
+                "count": 99,
+                "sample_ids": ["INV-0099", "INV-0999"],
                 "notes": None,
             },
             {
                 "test": "Fictitious vendor (address match)",
                 "severity": "medium",
-                "count": 42,
-                "sample_ids": ["V0001", "V001", "V004", "V005", "V009"],
+                "count": 999,
+                "sample_ids": ["V-0009", "V-0099", "V-0999"],
                 "notes": None,
             },
             {
                 "test": "Terminated users with access",
                 "severity": "critical",
-                "count": 3,
-                "sample_ids": ["U001", "U005", "U010"],
+                "count": 9,
+                "sample_ids": ["U-0009", "U-0099"],
                 "notes": None,
             },
         ],
-        "summary": "4 tests run, 47 total flags.",
+        # summary recomputed below; keep placeholder for structure
+        "summary": "",
     }
 
     total_rules = len(audit["findings"])
@@ -54,7 +55,7 @@ def build_mock_report_from_audit() -> dict:
 
     report = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "summary": audit["summary"],
+        "summary": f"{total_rules} tests run, {total_flags} total flags.",
         "metrics": {
             "rules_total": total_rules,
             "findings": total_flags,
