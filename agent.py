@@ -1,36 +1,50 @@
+# audit_agent.py
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
+
 import pandas as pd
 from pydantic import BaseModel
-from agents import Agent, Runner, function_tool, RunContextWrapper
 
-# ---------- Optional tool event emitter (set by runtime for UI streaming) ----------
-ToolEvent = Dict[str, Any]
-ToolEventEmitter = Callable[[str, ToolEvent], None]
-_TOOL_EVENT_EMITTER: Optional[ToolEventEmitter] = None
+from agents import (
+    Agent,
+    ItemHelpers,
+    MessageOutputItem,
+    Runner,
+    RunContextWrapper,
+    RunHooks,
+    function_tool,
+)
+
+from compute_helpers import (
+    je_same_user_post_approve as compute_je_same_user_post_approve,
+    p2p_duplicate_invoices as compute_p2p_duplicate_invoices,
+    fictitious_vendors as compute_fictitious_vendors,
+    terminated_users_with_access as compute_terminated_users_with_access,
+)
+
+# ---------------- Context ----------------
+Emitter = Callable[[str, Dict[str, Any]], None]
 
 
-def set_tool_event_emitter(emitter: Optional[ToolEventEmitter]) -> None:
-    global _TOOL_EVENT_EMITTER
-    _TOOL_EVENT_EMITTER = emitter
-
-
-def _emit_tool(event_type: str, payload: ToolEvent) -> None:
-    try:
-        if _TOOL_EVENT_EMITTER:
-            _TOOL_EVENT_EMITTER(event_type, payload)
-    except Exception:
-        # never let UI wiring break tool execution
-        pass
-
-
-# ---------- Context to share state across tools ----------
 @dataclass
 class AuditContext:
     tables: Dict[str, pd.DataFrame] = field(default_factory=dict)
+    emit: Optional[Emitter] = None  # optional: forward lifecycle events to UI/CLI
 
 
-# ---------- Simple output schema so the agent returns strict JSON ----------
+def _emit(
+    ctx: RunContextWrapper["AuditContext"], event: str, payload: Dict[str, Any]
+) -> None:
+    try:
+        if ctx.context.emit:
+            ctx.context.emit(event, payload)
+    except Exception:
+        pass  # logging must never break the run
+
+
+# ---------------- Output models ----------------
 class Finding(BaseModel):
     test: str
     severity: str
@@ -44,119 +58,14 @@ class AuditReport(BaseModel):
     summary: str
 
 
-# ---------- Utility ----------
-def _require(ctx: RunContextWrapper[AuditContext], name: str) -> pd.DataFrame:
-    if name not in ctx.context.tables:
-        raise ValueError(f"Table '{name}' not loaded. Call load_csv first.")
-    return ctx.context.tables[name]
-
-
-# ---------- Tools ----------
-def compute_je_same_user_post_approve(
-    df: pd.DataFrame,
-    id_col: str = "je_id",
-    posted_by_col: str = "posted_by",
-    approved_by_col: str = "approved_by",
-) -> Finding:
-    mask = (
-        df[posted_by_col].astype(str).str.lower()
-        == df[approved_by_col].astype(str).str.lower()
-    )
-    hits = df[mask]
-    sample = hits[id_col].astype(str).head(10).tolist()
-    return Finding(
-        test="JE same user posted & approved",
-        severity="high",
-        count=len(hits),
-        sample_ids=sample,
-    )
-
-
-def compute_p2p_duplicate_invoices(
-    df: pd.DataFrame,
-    vendor_col: str = "vendor_id",
-    inv_col: str = "invoice_no",
-    amt_col: str = "amount",
-) -> Finding:
-    grp = (
-        df.groupby([vendor_col, inv_col, amt_col], dropna=False)
-        .size()
-        .reset_index(name="n")
-    )
-    dups = grp[grp["n"] > 1]
-    ids = (
-        (
-            df.merge(
-                dups[[vendor_col, inv_col, amt_col]], on=[vendor_col, inv_col, amt_col]
-            )
-        )[inv_col]
-        .astype(str)
-        .unique()
-        .tolist()[:10]
-    )
-    return Finding(
-        test="P2P duplicate invoices",
-        severity="high",
-        count=len(dups),
-        sample_ids=list(ids),
-    )
-
-
-def compute_fictitious_vendors(
-    v: pd.DataFrame,
-    e: pd.DataFrame,
-    v_addr: str = "address",
-    e_addr: str = "address",
-    v_id: str = "vendor_id",
-) -> Finding:
-    v = v.copy()
-    e = e.copy()
-    v[v_addr] = v[v_addr].astype(str).str.strip().str.lower()
-    e[e_addr] = e[e_addr].astype(str).str.strip().str.lower()
-    matches = v.merge(e, left_on=v_addr, right_on=e_addr, how="inner")
-    sample = matches[v_id].astype(str).head(10).tolist()
-    return Finding(
-        test="Fictitious vendor (address match)",
-        severity="medium",
-        count=len(matches),
-        sample_ids=sample,
-    )
-
-
-def compute_terminated_users_with_access(
-    ua: pd.DataFrame,
-    emp: pd.DataFrame,
-    user_id: str = "user_id",
-    status_col: str = "employment_status",
-    active_flag: str = "active",
-) -> Finding:
-    term = emp[emp[status_col].astype(str).str.lower().eq("terminated")]
-    merged = ua.merge(term[[user_id]], on=user_id, how="inner")
-    still_active = merged[merged[active_flag] == True]
-    sample = still_active[user_id].astype(str).head(10).tolist()
-    return Finding(
-        test="Terminated users with access",
-        severity="critical",
-        count=len(still_active),
-        sample_ids=sample,
-    )
-
-
+# ---------------- Tools ----------------
 @function_tool
 def load_csv(ctx: RunContextWrapper[AuditContext], name: str, path: str) -> str:
-    """Load a CSV into memory for later tests.
-    Args:
-        name: Short handle, e.g. 'jes' or 'vendors'
-        path: File path to CSV
-    """
-    _emit_tool("tool_call", {"name": "load_csv", "args": {"name": name, "path": path}})
-    ctx.context.tables[name] = pd.read_csv(path)
-    summary = f"Loaded {name} with {len(ctx.context.tables[name])} rows."
-    _emit_tool(
-        "tool_result",
-        {"name": "load_csv", "ok": True, "summary": summary, "ms": 0},
-    )
-    return summary
+    """Load a CSV into memory for later tests."""
+    df = pd.read_csv(path)
+    ctx.context.tables[name] = df
+    _emit(ctx, "tool_note", {"tool": "load_csv", "name": name, "rows": len(df)})
+    return f"Loaded {name} with {len(df)} rows."
 
 
 @function_tool
@@ -168,31 +77,15 @@ def je_same_user_post_approve(
     approved_by_col: str = "approved_by",
 ) -> str:
     """Flag JEs where poster == approver."""
-    _emit_tool(
-        "tool_call",
-        {
-            "name": "je_same_user_post_approve",
-            "args": {
-                "table": table,
-                "id_col": id_col,
-                "posted_by_col": posted_by_col,
-                "approved_by_col": approved_by_col,
-            },
-        },
-    )
     df = _require(ctx, table)
-    finding = compute_je_same_user_post_approve(
-        df, id_col=id_col, posted_by_col=posted_by_col, approved_by_col=approved_by_col
+    count, sample = compute_je_same_user_post_approve(
+        df, id_col, posted_by_col, approved_by_col
     )
-    _emit_tool(
-        "tool_result",
-        {
-            "name": "je_same_user_post_approve",
-            "ok": True,
-            "summary": f"{finding.count} matches",
-            "finding": finding.model_dump(),
-            "ms": 0,
-        },
+    finding = Finding(
+        test="JE same user posted & approved",
+        severity="high",
+        count=count,
+        sample_ids=sample,
     )
     return finding.model_dump_json()
 
@@ -205,32 +98,14 @@ def p2p_duplicate_invoices(
     inv_col: str = "invoice_no",
     amt_col: str = "amount",
 ) -> str:
-    """Detect duplicate invoices: same vendor + invoice_no + amount."""
-    _emit_tool(
-        "tool_call",
-        {
-            "name": "p2p_duplicate_invoices",
-            "args": {
-                "table": table,
-                "vendor_col": vendor_col,
-                "inv_col": inv_col,
-                "amt_col": amt_col,
-            },
-        },
-    )
+    """Duplicate invoices: same vendor + invoice_no + amount."""
     df = _require(ctx, table)
-    finding = compute_p2p_duplicate_invoices(
-        df, vendor_col=vendor_col, inv_col=inv_col, amt_col=amt_col
-    )
-    _emit_tool(
-        "tool_result",
-        {
-            "name": "p2p_duplicate_invoices",
-            "ok": True,
-            "summary": f"{finding.count} duplicate groups",
-            "finding": finding.model_dump(),
-            "ms": 0,
-        },
+    count, ids = compute_p2p_duplicate_invoices(df, vendor_col, inv_col, amt_col)
+    finding = Finding(
+        test="P2P duplicate invoices",
+        severity="high",
+        count=count,
+        sample_ids=list(ids),
     )
     return finding.model_dump_json()
 
@@ -245,31 +120,14 @@ def fictitious_vendors(
     v_id: str = "vendor_id",
 ) -> str:
     """Vendor address matches an employee address."""
-    _emit_tool(
-        "tool_call",
-        {
-            "name": "fictitious_vendors",
-            "args": {
-                "vendor_table": vendor_table,
-                "emp_table": emp_table,
-                "v_addr": v_addr,
-                "e_addr": e_addr,
-                "v_id": v_id,
-            },
-        },
-    )
     v = _require(ctx, vendor_table)
     e = _require(ctx, emp_table)
-    finding = compute_fictitious_vendors(v, e, v_addr=v_addr, e_addr=e_addr, v_id=v_id)
-    _emit_tool(
-        "tool_result",
-        {
-            "name": "fictitious_vendors",
-            "ok": True,
-            "summary": f"{finding.count} address matches",
-            "finding": finding.model_dump(),
-            "ms": 0,
-        },
+    count, sample = compute_fictitious_vendors(v, e, v_addr, e_addr, v_id)
+    finding = Finding(
+        test="Fictitious vendor (address match)",
+        severity="medium",
+        count=count,
+        sample_ids=sample,
     )
     return finding.model_dump_json()
 
@@ -284,33 +142,16 @@ def terminated_users_with_access(
     active_flag: str = "active",
 ) -> str:
     """Terminated employees who still have active access."""
-    _emit_tool(
-        "tool_call",
-        {
-            "name": "terminated_users_with_access",
-            "args": {
-                "ua_table": ua_table,
-                "users_table": users_table,
-                "user_id": user_id,
-                "status_col": status_col,
-                "active_flag": active_flag,
-            },
-        },
-    )
     ua = _require(ctx, ua_table)
     emp = _require(ctx, users_table)
-    finding = compute_terminated_users_with_access(
-        ua, emp, user_id=user_id, status_col=status_col, active_flag=active_flag
+    count, sample = compute_terminated_users_with_access(
+        ua, emp, user_id, status_col, active_flag
     )
-    _emit_tool(
-        "tool_result",
-        {
-            "name": "terminated_users_with_access",
-            "ok": True,
-            "summary": f"{finding.count} active accounts",
-            "finding": finding.model_dump(),
-            "ms": 0,
-        },
+    finding = Finding(
+        test="Terminated users with access",
+        severity="critical",
+        count=count,
+        sample_ids=sample,
     )
     return finding.model_dump_json()
 
@@ -318,25 +159,16 @@ def terminated_users_with_access(
 @function_tool
 def compile_report(findings_json: List[str]) -> str:
     """Combine tool outputs (JSON strings) into a single AuditReport JSON."""
-    _emit_tool("tool_call", {"name": "compile_report", "args": {"n": len(findings_json)}})
     parsed = [Finding.model_validate_json(f) for f in findings_json]
     total_flags = sum(f.count for f in parsed)
     report = AuditReport(
-        findings=parsed, summary=f"{len(parsed)} tests run, {total_flags} total flags."
-    )
-    _emit_tool(
-        "tool_result",
-        {
-            "name": "compile_report",
-            "ok": True,
-            "summary": report.summary,
-            "ms": 0,
-        },
+        findings=parsed,
+        summary=f"{len(parsed)} tests run, {total_flags} total flags.",
     )
     return report.model_dump_json()
 
 
-# ---------- Agent ----------
+# ---------------- Agent ----------------
 auditor = Agent[AuditContext](
     name="AI Auditor",
     model="gpt-5",
@@ -355,28 +187,149 @@ auditor = Agent[AuditContext](
         terminated_users_with_access,
         compile_report,
     ],
-    # Tip: you can also enforce structured model output via AgentOutputSchema,
-    # see docs. For MVP we'll just emit JSON from tools.
 )
 
-# ---------- Demo runner ----------
+
+# ---------------- Hooks: forward lifecycle to ctx.emit ----------------
+class EmitHooks(RunHooks[AuditContext]):
+    async def on_agent_start(
+        self, context: RunContextWrapper[AuditContext], agent: Agent
+    ) -> None:
+        _emit(context, "agent_start", {"agent": agent.name})
+
+    async def on_llm_start(
+        self,
+        context: RunContextWrapper[AuditContext],
+        agent: Agent,
+        system_prompt: Optional[str],
+        input_items: list[Any],
+    ) -> None:
+        _emit(context, "llm_start", {"agent": agent.name, "inputs": len(input_items)})
+
+    async def on_tool_start(
+        self, context: RunContextWrapper[AuditContext], agent: Agent, tool
+    ) -> None:
+        _emit(
+            context,
+            "tool_start",
+            {"agent": agent.name, "tool": getattr(tool, "name", str(tool))},
+        )
+
+    async def on_tool_end(
+        self, context: RunContextWrapper[AuditContext], agent: Agent, tool, result: str
+    ) -> None:
+        _emit(
+            context,
+            "tool_end",
+            {
+                "agent": agent.name,
+                "tool": getattr(tool, "name", str(tool)),
+                "result_preview": str(result)[:160],
+            },
+        )
+
+    async def on_handoff(
+        self,
+        context: RunContextWrapper[AuditContext],
+        from_agent: Agent,
+        to_agent: Agent,
+    ) -> None:
+        _emit(context, "handoff", {"from": from_agent.name, "to": to_agent.name})
+
+    async def on_agent_end(
+        self, context: RunContextWrapper[AuditContext], agent: Agent, output: Any
+    ) -> None:
+        # Include usage (SDK exposes this on the context in hooks)
+        u = context.usage
+        _emit(
+            context,
+            "agent_end",
+            {
+                "agent": agent.name,
+                "output_preview": str(output)[:160],
+                "usage": {
+                    "requests": u.requests,
+                    "input_tokens": u.input_tokens,
+                    "output_tokens": u.output_tokens,
+                    "total_tokens": u.total_tokens,
+                },
+            },
+        )
+
+
+# ---------------- Utilities ----------------
+def _require(ctx: RunContextWrapper[AuditContext], name: str) -> pd.DataFrame:
+    if name not in ctx.context.tables:
+        raise ValueError(f"Table '{name}' not loaded. Call load_csv first.")
+    return ctx.context.tables[name]
+
+
+# Public helpers for callers embedding this module
+def run_audit_stream(
+    plan: str,
+    *,
+    emit: Optional[Emitter] = None,
+    hooks: Optional[RunHooks[AuditContext]] = None,
+):
+    """
+    Run the agent in streaming mode and return RunResultStreaming.
+    Callers can iterate result.stream_events() to drive their own UI.
+    """
+    ctx = AuditContext(emit=emit)
+    return Runner.run_streamed(
+        auditor, input=plan, context=ctx, hooks=hooks or EmitHooks()
+    )
+
+
+def run_audit(
+    plan: str,
+    *,
+    emit: Optional[Emitter] = None,
+    hooks: Optional[RunHooks[AuditContext]] = None,
+):
+    """
+    Non-streaming convenience wrapper (returns RunResult).
+    """
+    ctx = AuditContext(emit=emit)
+    return Runner.run(auditor, input=plan, context=ctx, hooks=hooks or EmitHooks())
+
+
+# ---------------- CLI demo (streamed) ----------------
 if __name__ == "__main__":
     import asyncio
 
     async def main():
-        ctx = AuditContext()
-        # Replace paths with your hackathon CSVs
-        plan = (
+        def console_emit(evt: str, payload: Dict[str, Any]) -> None:
+            print(f"[{evt}] {payload}")
+
+        ctx_plan = (
             "1) load_csv(name='jes', path='data/journal_entries.csv')\n"
             "2) load_csv(name='invoices', path='data/invoices.csv')\n"
             "3) load_csv(name='vendors', path='data/vendors.csv')\n"
             "4) load_csv(name='employees', path='data/employees.csv')\n"
             "5) load_csv(name='user_access', path='data/user_access.csv')\n"
             "Then run je_same_user_post_approve, p2p_duplicate_invoices, "
-            "fictitious_vendors, terminated_users_with_access, and "
-            "compile_report on their outputs."
+            "fictitious_vendors, terminated_users_with_access, and compile_report."
         )
-        result = await Runner.run(auditor, input=plan, context=ctx)
+
+        result = run_audit_stream(ctx_plan, emit=console_emit)
+
+        print("=== Streaming ===")
+        async for ev in result.stream_events():
+            if ev.type == "run_item_stream_event":
+                item = ev.item
+                if isinstance(item, MessageOutputItem):
+                    print(
+                        f"-- Assistant message:\n{ItemHelpers.text_message_output(item)}"
+                    )
+                else:
+                    # tool calls, outputs, handoffs, reasoning, etc.
+                    print(f"-- {ev.name}: {type(item).__name__}")
+            elif ev.type == "agent_updated_stream_event":
+                print(f"-- Agent switched to: {ev.new_agent.name}")
+            # raw_response_event is available if you want raw token deltas
+
+        print("=== Done ===")
         print("\n=== AUDIT REPORT (JSON) ===")
         print(result.final_output)
 
