@@ -253,8 +253,11 @@ def register_processing_page(
                             return
 
                     elif ev.type == "done":
-                        # stash a mock report so /report can render immediately
-                        store["report"] = build_mock_report_from_audit()
+                        # prefer real report from engine; fallback to mock
+                        if ev.data and ev.data.get("report"):
+                            store["report"] = ev.data.get("report")
+                        else:
+                            store["report"] = build_mock_report_from_audit()
                         next_btn.enable()
                         current_status.text = "All rules finished"
                         try:

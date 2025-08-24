@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 import pandas as pd
+from datetime import datetime
 from agent import (
     compute_je_same_user_post_approve,
     compute_p2p_duplicate_invoices,
     compute_fictitious_vendors,
     compute_terminated_users_with_access,
+    Finding,
 )
 
 EventType = Literal[
@@ -277,12 +279,13 @@ async def run_agent(files: List[Path]) -> None:
             title: str,
             tag: str,
             fn: Optional[str],
-        ) -> int:
+        ) -> Optional[Finding]:
             start_ms = time.perf_counter()
             await emit(Event("rule_started", rule_id=rid, data={"title": title, "tag": tag}))
             await emit(Event("rule_status", rule_id=rid, data={"text": "Thinking..."}))
 
             findings = 0
+            finding_model: Optional[Finding] = None
             try:
                 if fn is None:
                     await emit(
@@ -324,6 +327,7 @@ async def run_agent(files: List[Path]) -> None:
                             df, id_col=id_col, posted_by_col=posted_by_col, approved_by_col=approved_by_col
                         )
                         findings = int(finding_obj.count)
+                        finding_model = finding_obj
                         await emit(
                             Event(
                                 "tool_result",
@@ -369,6 +373,7 @@ async def run_agent(files: List[Path]) -> None:
                                 raise ValueError(f"Missing column '{col}' in invoices")
                         finding_obj = compute_p2p_duplicate_invoices(df, vendor_col="vendor_id", inv_col="invoice_no", amt_col="amount")
                         findings = int(finding_obj.count)
+                        finding_model = finding_obj
                         await emit(
                             Event(
                                 "tool_result",
@@ -417,6 +422,7 @@ async def run_agent(files: List[Path]) -> None:
                             raise ValueError("Missing column 'vendor_id' in vendors")
                         finding_obj = compute_fictitious_vendors(v, e, v_addr="address", e_addr="address", v_id="vendor_id")
                         findings = int(finding_obj.count)
+                        finding_model = finding_obj
                         await emit(
                             Event(
                                 "tool_result",
@@ -465,6 +471,7 @@ async def run_agent(files: List[Path]) -> None:
                             ua, emp, user_id="user_id", status_col="employment_status", active_flag="active"
                         )
                         findings = int(finding_obj.count)
+                        finding_model = finding_obj
                         await emit(
                             Event(
                                 "tool_result",
@@ -496,10 +503,10 @@ async def run_agent(files: List[Path]) -> None:
                         data={"findings": findings, "ms": dur_ms},
                     )
                 )
-                return findings
+                return finding_model
             except Exception as e:
                 await emit(Event("rule_failed", rule_id=rid, data={"error": str(e)}))
-                return 0
+                return None
 
         total_rules = len(DUMMY_RULES)
         completed = 0
@@ -512,13 +519,16 @@ async def run_agent(files: List[Path]) -> None:
         )
 
         # Iterate rules, using RULE_TO_TOOL where available
+        collected: List[Finding] = []
         for rule in DUMMY_RULES:
             rid = str(rule.get("id", ""))
             title = str(rule.get("title", ""))
             tag = str(rule.get("tag", ""))
             tool = RULE_TO_TOOL.get(rid)
-            f = await rule_lifecycle(rid, title, tag, tool)
-            total_findings += f
+            fobj = await rule_lifecycle(rid, title, tag, tool)
+            if fobj is not None:
+                collected.append(fobj)
+                total_findings += int(fobj.count)
             completed += 1
             await emit(
                 Event(
@@ -533,7 +543,38 @@ async def run_agent(files: List[Path]) -> None:
 
             await asyncio.sleep(0.05)
 
-        await emit(Event("done"))
+        # Build an Audit-like report payload for UI
+        audit_findings = [f.model_dump() for f in collected]
+        total_flags = sum(int(f["count"]) for f in audit_findings)
+        audit = {
+            "findings": audit_findings,
+            "summary": f"{len(audit_findings)} tests run, {total_flags} total flags.",
+        }
+        def sev_sum(level: str) -> int:
+            return sum(int(f.get("count", 0)) for f in audit_findings if str(f.get("severity", "")).lower() == level)
+        report = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": audit["summary"],
+            "metrics": {
+                "rules_total": len(audit_findings),
+                "findings": total_flags,
+                "critical": sev_sum("critical"),
+                "high": sev_sum("high"),
+                "medium": sev_sum("medium"),
+            },
+            "action_items": [
+                {
+                    "title": f"Review {f['test']} ({f['count']} findings)",
+                    "owner": "You",
+                    "due": "Today",
+                }
+                for f in audit_findings
+                if int(f.get("count", 0)) > 0
+            ],
+            "raw": audit,
+        }
+
+        await emit(Event("done", data={"report": report}))
     except asyncio.CancelledError:
         # Swallow cancellation cleanly when user navigates away
         return
