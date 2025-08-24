@@ -260,6 +260,14 @@ async def run_agent_live(files: List[Path]) -> None:
 
     # Hooks to surface tool lifecycle with names (more precise than stream_run tool items)
     class UIHooks:
+        async def on_agent_start(self, context: Any, agent: Any) -> None:
+            # Optional: could emit a status like "Agent started"
+            return None
+
+        async def on_agent_end(self, context: Any, agent: Any, output: Any) -> None:
+            # Optional: could emit a status like "Agent finished"
+            return None
+
         async def on_tool_start(self, context: Any, agent: Any, tool: Any) -> None:
             try:
                 name = getattr(tool, "name", "")
