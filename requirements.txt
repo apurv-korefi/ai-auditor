@@ -1,0 +1,6 @@
+nicegui
+pandas
+
+pydantic>=2
+
+openai-agents
