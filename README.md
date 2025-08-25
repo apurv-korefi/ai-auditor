@@ -1,5 +1,7 @@
 # AI Accountant Detective
 
+![App landing](./landing.jpeg)
+
 AI Accountant Detective that does 100% materiality assesment and focus on the suspicious transactions.
 
 **Quick Start**
