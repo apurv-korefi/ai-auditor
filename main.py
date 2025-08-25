@@ -26,7 +26,7 @@ from typing import Literal, Optional, Any, Dict, List
 import random
 import time
 
-APP_TITLE = "AI Audit Assitant"
+APP_TITLE = "AI Accountant Detective"
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 

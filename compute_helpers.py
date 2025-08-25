@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import List, Optional
 import pandas as pd
 from pydantic import BaseModel
+import time
 
 
 # ---------------- Pydantic models (shared with tools/agent) ----------------
@@ -34,6 +35,8 @@ def compute_je_same_user_post_approve(
     """
     Flag journal entries where the same user posted and approved.
     """
+    # Dummy delay for UI demonstration
+    time.sleep(1)
     lhs = df[posted_by_col].astype(str).str.lower()
     rhs = df[approved_by_col].astype(str).str.lower()
     hits = df[lhs.eq(rhs)]
@@ -56,6 +59,8 @@ def compute_p2p_duplicate_invoices(
     """
     Detect duplicate invoices defined by identical (vendor_id, invoice_no, amount).
     """
+    # Dummy delay for UI demonstration
+    time.sleep(1)
     grp = (
         df.groupby([vendor_col, inv_col, amt_col], dropna=False)
         .size()
@@ -91,6 +96,8 @@ def compute_fictitious_vendors(
     """
     Identify vendors whose (normalized) address matches an employee address.
     """
+    # Dummy delay for UI demonstration
+    time.sleep(1)
     v = vendors.copy()
     e = employees.copy()
 
@@ -121,6 +128,8 @@ def compute_terminated_users_with_access(
     """
     Terminated employees who still have active access in a permissions table.
     """
+    # Dummy delay for UI demonstration
+    time.sleep(1)
     term = employees[employees[status_col].astype(str).str.lower().eq("terminated")]
     merged = user_access.merge(term[[user_id]], on=user_id, how="inner")
     # Keep strictly True; if your data stores "Y"/"N", map before calling this function.
